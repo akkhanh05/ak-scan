@@ -5,7 +5,7 @@ import { DndContext, DragEndEvent, PointerSensor, useSensor, useSensors } from "
 import { arrayMove, SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { AlertTriangle, Crop, Download, Eye, FileText, ImagePlus, LoaderCircle, RotateCw, ScanLine, ScanSearch, SlidersHorizontal } from "lucide-react";
 import { jsPDF } from "jspdf";
-import { analyzeImageQuality, defaultCorners, defaultSettings, detectDocumentCorners, FilterName, renderPage, ScanPage } from "@/workflow/shared/core";
+import { analyzeImageQuality, defaultCorners, defaultSettings, detectDocumentCorners, FilterName, ocrPreprocessFilters, renderPage, ScanPage } from "@/workflow/shared/core";
 import { ScanPreview } from "./scan-preview";
 import { ExportDialog, ExportOptions } from "./export-dialog";
 import { HomeGuide } from "./home-guide";
@@ -16,13 +16,15 @@ import { HomeUpload } from "./home-upload";
 import { SortablePage } from "./sortable-page";
 import { ExportGuide } from "./export-guide";
 import { PageToc } from "./page-toc";
-import { detectUploadKind, safeDisplayName, sanitizeDocumentText, withTimeout, PdfTextItem, recognizedTextLines, analyzePageLayout, tokensFromPdfTextItems, postProcessOcrLine, repairFragmentedOcrWords, scoreOcrCandidate, cleanOcrPageLines, mergeDocumentParagraphs, isSuspiciousOcrLine, selectBestOcrLines, deduplicateOcrLines, structureOcrDocumentLines } from "@/workflow/shared/core";
+import { detectUploadKind, safeDisplayName, sanitizeDocumentText, withTimeout, withOcrTimeout, PdfTextItem, TerminableOcrWorker, recognizedTextLines, analyzePageLayout, tokensFromPdfTextItems, postProcessOcrLine, repairFragmentedOcrWords, scoreOcrCandidate, cleanOcrPageLines, mergeDocumentParagraphs, isSuspiciousOcrLine, selectBestOcrLines, deduplicateOcrLines, structureOcrDocumentLines } from "@/workflow/shared/core";
 import type { PSM } from "tesseract.js";
+import { ImportSessionController } from "@/workflow/shared/core/import-session";
 
 const MAX_IMAGE_BYTES = 15 * 1024 * 1024;
 const MAX_PDF_BYTES = 40 * 1024 * 1024;
 const MAX_IMAGE_PIXELS = 24_000_000;
 const MAX_SESSION_PIXELS = 160_000_000;
+const OCR_RECOGNITION_TIMEOUT = 90_000;
 
 function selectedOcrLanguages() {
   return "eng+vie";
@@ -102,11 +104,36 @@ export function ScanWorkspace() {
   const pdfRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
   const objectUrls = useRef(new Set<string>());
+  const importSession = useRef(new ImportSessionController());
   const cancelExport = useRef(false);
+  const activeOcrWorkers = useRef(new Set<TerminableOcrWorker>());
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
   const active = pages.find((page) => page.id === activeId) ?? pages[0];
 
-  useEffect(() => () => { objectUrls.current.forEach((url) => URL.revokeObjectURL(url)); objectUrls.current.clear(); }, []);
+  function stopActiveOcrWorkers() {
+    activeOcrWorkers.current.forEach((worker) => { void Promise.resolve(worker.terminate()).catch(() => undefined); });
+    activeOcrWorkers.current.clear();
+  }
+
+  function cancelCurrentExport() {
+    cancelExport.current = true;
+    stopActiveOcrWorkers();
+  }
+
+  async function recognizeWithTimeout<T>(worker: TerminableOcrWorker, recognition: Promise<T>, pageNumber: number) {
+    if (cancelExport.current) throw new DOMException("Đã hủy xuất", "AbortError");
+    const result = await withOcrTimeout(worker, recognition, OCR_RECOGNITION_TIMEOUT, `Nhận diện văn bản trang ${pageNumber} mất quá nhiều thời gian.`);
+    if (cancelExport.current) throw new DOMException("Đã hủy xuất", "AbortError");
+    return result;
+  }
+
+  useEffect(() => () => {
+    importSession.current.cancel();
+    cancelExport.current = true;
+    stopActiveOcrWorkers();
+    objectUrls.current.forEach((url) => URL.revokeObjectURL(url));
+    objectUrls.current.clear();
+  }, []);
 
   async function inspectFile(file: File) {
     const name = safeDisplayName(file.name);
@@ -166,9 +193,12 @@ export function ScanWorkspace() {
   }
 
   async function addFiles(files: FileList | File[]) {
-    if (exporting || importing) return;
+    if (exporting) return;
     const candidates = Array.from(files);
     if (!candidates.length) return;
+    const lease = importSession.current.start();
+    if (lease === null) return;
+    const isCurrentImport = () => importSession.current.isActive(lease);
     setImporting(true);
     setMessage(candidates.some((file) => file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) ? "Đang mở và dựng các trang PDF…" : "Đang mở ảnh…");
     const room = Math.max(0, 20 - pages.length);
@@ -177,11 +207,18 @@ export function ScanWorkspace() {
     const errors: string[] = [];
     let importedPdf = false;
     let importedDocumentPdf = false;
+    try {
     for (const file of candidates.slice(0, room)) {
+      if (!isCurrentImport()) return;
       try {
         const kind = await detectUploadKind(file);
+        if (!isCurrentImport()) return;
         if (!kind) throw new Error(`${safeDisplayName(file.name)}: định dạng hoặc nội dung file không hợp lệ.`);
         const inspectedPages = kind === "pdf" ? await inspectPdf(file, room - next.length) : [{ ...(await inspectFile(file)), name: safeDisplayName(file.name) }];
+        if (!isCurrentImport()) {
+          inspectedPages.forEach(({ url }) => { URL.revokeObjectURL(url); objectUrls.current.delete(url); });
+          return;
+        }
         if (kind === "pdf") importedPdf = true;
         if (kind === "pdf" && inspectedPages.some((page) => Boolean(page.embeddedText))) importedDocumentPdf = true;
         const incomingPixels = inspectedPages.reduce((total, inspected) => total + inspected.width * inspected.height, 0);
@@ -192,13 +229,16 @@ export function ScanWorkspace() {
         for (const inspected of inspectedPages) {
           const sourcePixels = inspected.width * inspected.height;
           const quality = await analyzeImageQuality(inspected.url, inspected.width, inspected.height);
+          if (!isCurrentImport()) return;
           sessionPixels += sourcePixels;
           next.push({ id: crypto.randomUUID(), name: inspected.name, url: inspected.url, rotation: 0, fineRotation: 0, dewarp: true, corners: defaultCorners.map((p) => ({ ...p })) as typeof defaultCorners, settings: { ...defaultSettings }, qualityWarning: quality.warning, embeddedText: inspected.embeddedText, embeddedTextItems: inspected.embeddedTextItems, pdfKind: inspected.pdfKind, sourcePixels });
         }
       }
       catch (error) { errors.push(error instanceof Error ? error.message : `${file.name}: không thể đọc ảnh.`); }
     }
-    if (!next.length) { setMessage(errors[0] ?? "Hãy chọn ảnh JPG, PNG, WebP hoặc PDF hợp lệ."); setImporting(false); return; }
+    if (!isCurrentImport()) return;
+    if (!next.length) { setMessage(errors[0] ?? "Hãy chọn ảnh JPG, PNG, WebP hoặc PDF hợp lệ."); return; }
+    if (!isCurrentImport()) return;
     setPages((current) => [...current, ...next]);
     setActiveId((current) => current || next[0].id);
     const hasDocumentPdf = importedDocumentPdf || pages.some((page) => Boolean(page.embeddedText));
@@ -216,7 +256,9 @@ export function ScanWorkspace() {
           : importedPdf
             ? "Đã nhận diện PDF scan · mặc định đóng gói lại thành PDF."
             : `Đã thêm ${next.length} ảnh · sẵn sàng chỉnh và xuất PDF.`);
-    setImporting(false);
+    } finally {
+      if (importSession.current.finish(lease)) setImporting(false);
+    }
   }
 
   function updateActive(patch: Partial<ScanPage>) { if (active && !exporting) setPages((list) => list.map((page) => page.id === active.id ? { ...page, ...patch } : page)); }
@@ -263,6 +305,7 @@ export function ScanWorkspace() {
         setProgress(Math.min(99, Math.round((currentOcrPage + status.progress) / exportPages.length * 100)));
       },
     });
+    activeOcrWorkers.current.add(worker);
     await worker.setParameters({ tessedit_pageseg_mode: selectedPageSegmentation(exportOptions), preserve_interword_spaces: "1", user_defined_dpi: "300" });
     try {
       for (let index = 0; index < exportPages.length; index++) {
@@ -270,7 +313,7 @@ export function ScanWorkspace() {
         if (cancelExport.current) throw new DOMException("Đã hủy xuất PDF", "AbortError");
         setMessage(`Đang nhận diện văn bản trang ${index + 1}/${exportPages.length}…`);
         const canvas = await renderPage(exportPages[index], maxEdge);
-        let result = await worker.recognize(canvas, {}, { text: true, blocks: true });
+        let result = await recognizeWithTimeout(worker, worker.recognize(canvas, {}, { text: true, blocks: true }), index + 1);
         const candidateResults = [result];
         let retryCanvas = canvas;
         let bestScore = scoreOcrCandidate(result.data.text, result.data.confidence);
@@ -278,12 +321,12 @@ export function ScanWorkspace() {
           const enhancedPage: ScanPage = { ...exportPages[index], settings: { ...exportPages[index].settings, filter: "enhanced", removeShadow: Math.max(42, exportPages[index].settings.removeShadow), whiten: Math.max(24, exportPages[index].settings.whiten) } };
           const enhancedCanvas = await renderPage(enhancedPage, maxEdge);
           retryCanvas = enhancedCanvas;
-          const enhancedResult = await worker.recognize(enhancedCanvas, {}, { text: true, blocks: true });
+          const enhancedResult = await recognizeWithTimeout(worker, worker.recognize(enhancedCanvas, {}, { text: true, blocks: true }), index + 1);
           candidateResults.push(enhancedResult);
           const enhancedScore = scoreOcrCandidate(enhancedResult.data.text, enhancedResult.data.confidence);
           if (enhancedScore > bestScore) { result = enhancedResult; bestScore = enhancedScore; }
           await worker.setParameters({ tessedit_pageseg_mode: "6" as PSM, preserve_interword_spaces: "1", user_defined_dpi: "300" });
-          const blockResult = await worker.recognize(enhancedCanvas, {}, { text: true, blocks: true });
+          const blockResult = await recognizeWithTimeout(worker, worker.recognize(enhancedCanvas, {}, { text: true, blocks: true }), index + 1);
           candidateResults.push(blockResult);
           if (scoreOcrCandidate(blockResult.data.text, blockResult.data.confidence) > bestScore) result = blockResult;
           await worker.setParameters({ tessedit_pageseg_mode: selectedPageSegmentation(exportOptions), preserve_interword_spaces: "1", user_defined_dpi: "300" });
@@ -305,7 +348,7 @@ export function ScanWorkspace() {
           for (const line of suspiciousLines) {
             const padding = Math.max(8, Math.round((line.bbox.y1 - line.bbox.y0) * .45));
             const rectangle = { left: Math.max(0, Math.floor(line.bbox.x0 - padding)), top: Math.max(0, Math.floor(line.bbox.y0 - padding)), width: Math.min(retryCanvas.width, Math.ceil(line.bbox.x1 - line.bbox.x0 + padding * 2)), height: Math.min(retryCanvas.height, Math.ceil(line.bbox.y1 - line.bbox.y0 + padding * 2)) };
-            const retry = await worker.recognize(retryCanvas, { rectangle }, { text: true, blocks: true });
+            const retry = await recognizeWithTimeout(worker, worker.recognize(retryCanvas, { rectangle }, { text: true, blocks: true }), index + 1);
             const retryText = cleanOcrPageLines(recognizedTextLines(retry.data.text)).join(" ");
             if (retryText && scoreOcrCandidate(retryText, retry.data.confidence) > scoreOcrCandidate(line.text, line.confidence)) {
               line.text = retryText;
@@ -361,22 +404,43 @@ export function ScanWorkspace() {
       const blob = new Blob([new Uint8Array(bytes).buffer], { type: "application/pdf" });
       downloadBlob(blob, `ak-scan-searchable-${new Date().toISOString().slice(0, 10)}.pdf`);
     } finally {
-      await worker.terminate();
+      activeOcrWorkers.current.delete(worker);
+      try { await worker.terminate(); } catch { /* Cancellation may have already stopped this worker. */ }
     }
   }
 
   async function createWordDocument(exportPages: ScanPage[], maxEdge: number) {
-    const [{ createWorker }, { AlignmentType, Document, Packer, Paragraph, Table, TableCell, TableRow, TextRun, WidthType }] = await Promise.all([import("tesseract.js"), import("docx")]);
+    const [{ createWorker }, { AlignmentType, Document, LevelFormat, Packer, Paragraph, Table, TableCell, TableRow, TextRun, WidthType }] = await Promise.all([import("tesseract.js"), import("docx")]);
     let currentOcrPage = 0;
     const needsOcr = exportPages.some((page) => page.pdfKind === "scan" || !page.embeddedText);
     const worker = needsOcr ? await createWorker(selectedOcrLanguages(), undefined, {
       ...localOcrAssets,
       logger: (status) => setProgress(Math.min(99, Math.round((currentOcrPage + status.progress) / exportPages.length * 100))),
     }) : null;
+    if (worker) activeOcrWorkers.current.add(worker);
     if (worker) await worker.setParameters({ tessedit_pageseg_mode: selectedPageSegmentation(exportOptions), preserve_interword_spaces: "1", user_defined_dpi: "300" });
     const paragraphs: Array<InstanceType<typeof Paragraph> | InstanceType<typeof Table>> = [];
     try {
       for (let index = 0; index < exportPages.length; index++) {
+        let hasPageContent = false;
+        let previousWasList = false;
+        let listInstance = index;
+        const append = (element: InstanceType<typeof Paragraph> | InstanceType<typeof Table>) => {
+          // A DOCX flows continuously by default. Preserve each source-PDF page.
+          if (!hasPageContent && index > 0) paragraphs.push(new Paragraph({ pageBreakBefore: true }));
+          paragraphs.push(element);
+          hasPageContent = true;
+        };
+        const isOrderedList = (text: string) => /^\s*\d{1,3}[.)]\s+/.test(text);
+        const withoutListMarker = (text: string) => sanitizeDocumentText(text.replace(/^\s*(?:\d{1,3}[.)]|[-•‣◦])\s+/, ""));
+        const listProperties = (text: string, isList: boolean) => {
+          if (!isList) { previousWasList = false; return {}; }
+          if (!previousWasList) listInstance++;
+          previousWasList = true;
+          return isOrderedList(text)
+            ? { numbering: { reference: "ak-numbered-list", level: 0, instance: listInstance } }
+            : { bullet: { level: 0 } };
+        };
         currentOcrPage = index;
         if (cancelExport.current) throw new DOMException("Đã hủy xuất Word", "AbortError");
         setMessage(`Đang đọc chữ trang ${index + 1}/${exportPages.length}…`);
@@ -386,19 +450,28 @@ export function ScanWorkspace() {
             const tokens = tokensFromPdfTextItems(sourcePage.embeddedTextItems.map((item) => ({ str: item.text, transform: [1, 0, 0, item.height, item.x, item.y], width: item.width, height: item.height, fontName: item.fontName, hasEOL: item.hasEol })), index + 1);
             mergeDocumentParagraphs(analyzePageLayout(tokens)).forEach((block) => {
               if (block.kind === "table" && block.table) {
-                paragraphs.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: block.table.rows.map((row) => new TableRow({ children: row.map((cell) => new TableCell({ children: [new Paragraph(sanitizeDocumentText(cell))] })) })) }));
+                previousWasList = false;
+                append(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: block.table.rows.map((row) => new TableRow({ children: row.map((cell) => new TableCell({ children: [new Paragraph(sanitizeDocumentText(cell))] })) })) }));
                 return;
               }
               const size = Math.max(18, Math.min(42, Math.round((block.lines?.[0]?.fontSize ?? 11) * 2)));
-              paragraphs.push(new Paragraph({
+              const isList = block.kind === "list-item";
+              const sourceTokens = block.lines?.flatMap((line) => line.tokens) ?? [];
+              const contentTokens = isList && sourceTokens.length > 1 && /^(?:\d{1,3}[.)]|[-•‣◦])$/.test(sourceTokens[0]?.text ?? "") ? sourceTokens.slice(1) : sourceTokens;
+              const runs = contentTokens.length ? contentTokens.map((token, tokenIndex) => {
+                const next = contentTokens[tokenIndex + 1]?.text ?? "";
+                const suffix = /^[,.;:!?%…)}\]]/.test(next) || /[(\[]$/.test(token.text) ? "" : " ";
+                return new TextRun({ text: `${sanitizeDocumentText(token.text)}${suffix}`, size, bold: Boolean(token.bold) || block.kind === "heading", italics: Boolean(token.italic) });
+              }) : [new TextRun({ text: isList ? withoutListMarker(block.text ?? "") : sanitizeDocumentText(block.text ?? ""), size, bold: block.kind === "heading" })];
+              append(new Paragraph({
                 heading: block.kind === "heading" ? (block.level === 1 ? "Heading1" : "Heading2") : undefined,
-                bullet: block.kind === "list-item" ? { level: 0 } : undefined,
+                ...listProperties(block.text ?? "", isList),
                 alignment: block.kind === "paragraph" ? AlignmentType.JUSTIFIED : AlignmentType.LEFT,
                 indent: exportOptions.wordMode === "preserve-layout" ? { left: Math.max(0, Math.round(block.bbox.x0 * 20)) } : undefined,
-                children: [new TextRun({ text: sanitizeDocumentText(block.text ?? ""), size, bold: block.kind === "heading" })],
+                children: runs,
               }));
             });
-          } else sourcePage.embeddedText.split(/\r?\n/).filter((line) => line.trim()).forEach((line) => paragraphs.push(new Paragraph({ children: [new TextRun(sanitizeDocumentText(line.trim()))] })));
+          } else sourcePage.embeddedText.split(/\r?\n/).filter((line) => line.trim()).forEach((line) => append(new Paragraph({ children: [new TextRun(sanitizeDocumentText(line.trim()))] })));
           setProgress(Math.round((index + 1) / exportPages.length * 100));
           continue;
         }
@@ -408,18 +481,25 @@ export function ScanWorkspace() {
         };
         const grayscale = await renderPage(grayscalePage, maxEdge);
         if (!worker) throw new Error("Không thể khởi tạo bộ nhận diện chữ.");
-        let best = await worker.recognize(grayscale, {}, { text: true, blocks: true });
+        let best = await recognizeWithTimeout(worker, worker.recognize(grayscale, {}, { text: true, blocks: true }), index + 1);
+        const ocrCandidates = [best];
 
-        if (best.data.confidence < 94) {
-          const enhancedPage: ScanPage = { ...sourcePage, settings: { ...grayscalePage.settings, filter: "enhanced" } };
-          const enhanced = await renderPage(enhancedPage, maxEdge);
-          const alternative = await worker.recognize(enhanced, {}, { text: true, blocks: true });
-          if (alternative.data.confidence > best.data.confidence) best = alternative;
-          releaseCanvas(enhanced);
+        // Faint, italic, or small text needs a genuinely different image, not
+        // only another segmentation mode. The adaptive-binary profile is kept
+        // for weak scans because it can erase useful tonal detail on clean PDF
+        // renderings.
+        for (const filter of ocrPreprocessFilters(best.data.confidence).slice(1)) {
+          const variantPage: ScanPage = { ...sourcePage, settings: { ...grayscalePage.settings, filter } };
+          const variant = await renderPage(variantPage, maxEdge);
+          const alternative = await recognizeWithTimeout(worker, worker.recognize(variant, {}, { text: true, blocks: true }), index + 1);
+          ocrCandidates.push(alternative);
+          if (scoreOcrCandidate(alternative.data.text, alternative.data.confidence) > scoreOcrCandidate(best.data.text, best.data.confidence)) best = alternative;
+          releaseCanvas(variant);
         }
-        if (best.data.confidence < 86) {
+        if (best.data.confidence < 96) {
           await worker.setParameters({ tessedit_pageseg_mode: "6" as PSM, preserve_interword_spaces: "1", user_defined_dpi: "300" });
-          const alternateLayout = await worker.recognize(grayscale, {}, { text: true, blocks: true });
+          const alternateLayout = await recognizeWithTimeout(worker, worker.recognize(grayscale, {}, { text: true, blocks: true }), index + 1);
+          ocrCandidates.push(alternateLayout);
           if (alternateLayout.data.confidence > best.data.confidence) best = alternateLayout;
           await worker.setParameters({ tessedit_pageseg_mode: selectedPageSegmentation(exportOptions), preserve_interword_spaces: "1", user_defined_dpi: "300" });
         }
@@ -430,40 +510,73 @@ export function ScanWorkspace() {
           .filter((word) => word.text?.trim() && word.bbox)
           .map((word) => ({ text: word.text.trim(), confidence: word.confidence, bbox: word.bbox })) ?? [];
         const repairedWords = repairFragmentedOcrWords(ocrWords);
-        const cleanedLines = best.data.blocks?.flatMap((block) => block.paragraphs.flatMap((paragraph) => paragraph.lines))
-          .filter((line) => line.text.trim()).sort((a, b) => a.bbox.y0 - b.bbox.y0)
-          .map((line) => {
-            if (!line.words?.length) return line.text.trim();
-            const repaired = repairFragmentedOcrWords(line.words.filter((word) => word.text?.trim() && word.bbox).map((word) => ({ text: word.text.trim(), normalizedText: word.text.trim(), confidence: word.confidence, bbox: word.bbox })));
-            // Use the final cleaned words, rather than letting repaired OCR
-            // fragments bypass the confidence/noise filter.
-            return repaired.length ? postProcessOcrLine({ words: repaired }).text : postProcessOcrLine(line).text;
-          }).filter(Boolean) ?? [];
+        // A page-wide confidence score can hide one badly recognized line (most
+        // often small italic text). Compare every rendered/segmentation attempt
+        // row-by-row, then keep the strongest line from each candidate.
+        const positionedCandidateLines = ocrCandidates.map((candidate) => candidate.data.blocks?.flatMap((block) => block.paragraphs.flatMap((paragraph) => paragraph.lines))
+          .filter((line) => line.text.trim() && line.bbox)
+          .map((line) => ({
+            words: (line.words ?? []).filter((word) => word.text?.trim() && word.bbox).map((word) => ({ text: word.text.trim(), confidence: word.confidence, bbox: word.bbox })),
+            text: line.text.trim(), confidence: line.confidence, bbox: line.bbox,
+          })) ?? []);
+        const selectedLines = selectBestOcrLines(positionedCandidateLines);
+        // Whole-page layout modes remain best for reading order, while PSM 7
+        // is markedly better for a faint, italic, or tightly-spaced visual
+        // row. Retry only suspicious rows so we do not turn a structured page
+        // into a stream of unrelated single-line OCR calls.
+        const retryLines = selectedLines.filter((line) => isSuspiciousOcrLine(line.text, line.confidence)).slice(0, 10);
+        if (retryLines.length) {
+          await worker.setParameters({ tessedit_pageseg_mode: "7" as PSM, preserve_interword_spaces: "1", user_defined_dpi: "300" });
+          for (const line of retryLines) {
+            const padding = Math.max(10, Math.round((line.bbox.y1 - line.bbox.y0) * .6));
+            const left = Math.max(0, Math.floor(line.bbox.x0 - padding));
+            const top = Math.max(0, Math.floor(line.bbox.y0 - padding));
+            const right = Math.min(grayscale.width, Math.ceil(line.bbox.x1 + padding));
+            const bottom = Math.min(grayscale.height, Math.ceil(line.bbox.y1 + padding));
+            const retry = await recognizeWithTimeout(worker, worker.recognize(grayscale, { rectangle: { left, top, width: Math.max(1, right - left), height: Math.max(1, bottom - top) } }, { text: true, blocks: true }), index + 1);
+            const retryText = cleanOcrPageLines(recognizedTextLines(retry.data.text)).join(" ");
+            if (retryText && scoreOcrCandidate(retryText, retry.data.confidence) > scoreOcrCandidate(line.text, line.confidence)) {
+              line.text = retryText;
+              line.confidence = retry.data.confidence;
+              line.words = [];
+            }
+          }
+          await worker.setParameters({ tessedit_pageseg_mode: selectedPageSegmentation(exportOptions), preserve_interword_spaces: "1", user_defined_dpi: "300" });
+        }
+        const cleanedLines = selectedLines.sort((a, b) => a.bbox.y0 - b.bbox.y0).map((line) => {
+          if (!line.words.length) return line.text;
+          const repaired = repairFragmentedOcrWords(line.words.map((word) => ({ ...word, normalizedText: word.text })));
+          return repaired.length ? postProcessOcrLine({ words: repaired }).text : line.text;
+        }).filter(Boolean);
         const pageLines = deduplicateOcrLines(cleanOcrPageLines(cleanedLines.length ? cleanedLines : recognizedTextLines(best.data.text)));
         const contentText = pageLines.length ? pageLines.join("\n") : (repairedWords.length ? repairedWords.map((word) => word.text).join(" ") : best.data.text);
         const contentLines = contentText.split(/\r?\n/).map((line) => sanitizeDocumentText(line)).filter(Boolean);
         const structuredParagraphs = structureOcrDocumentLines(contentLines.length ? contentLines : recognizedTextLines(best.data.text));
-        structuredParagraphs.forEach((block) => paragraphs.push(new Paragraph({
-          heading: block.kind === "title" ? "Heading1" : block.kind === "heading" ? "Heading2" : undefined,
-          alignment: block.kind === "paragraph" ? AlignmentType.JUSTIFIED : AlignmentType.LEFT,
-          indent: block.kind === "list-item" ? { left: 360, hanging: 240 } : undefined,
-          spacing: { before: block.kind === "heading" ? 180 : 0, after: block.kind === "title" ? 180 : block.kind === "heading" ? 100 : 80, line: 276, lineRule: "auto" },
-          children: [new TextRun({
-            text: sanitizeDocumentText(block.text),
-            size: block.kind === "title" ? 28 : block.kind === "heading" ? 22 : 20,
-            bold: block.kind === "title" || block.kind === "heading",
-            color: block.kind === "title" ? "1F4E79" : "000000",
-            language: { value: "en-US" },
-          })],
-        })));
+        structuredParagraphs.forEach((block) => {
+          const isList = block.kind === "list-item";
+          append(new Paragraph({
+            heading: block.kind === "title" ? "Heading1" : block.kind === "heading" ? "Heading2" : undefined,
+            alignment: block.kind === "paragraph" ? AlignmentType.JUSTIFIED : AlignmentType.LEFT,
+            ...listProperties(block.text, isList),
+            spacing: { before: block.kind === "heading" ? 180 : 0, after: block.kind === "title" ? 180 : block.kind === "heading" ? 100 : 80, line: 276, lineRule: "auto" },
+            children: [new TextRun({
+              text: isList ? withoutListMarker(block.text) : sanitizeDocumentText(block.text),
+              size: block.kind === "title" ? 28 : block.kind === "heading" ? 22 : 20,
+              bold: block.kind === "title" || block.kind === "heading",
+              color: block.kind === "title" ? "1F4E79" : "000000",
+              language: { value: "en-US" },
+            })],
+          }));
+        });
         releaseCanvas(grayscale);
         setProgress(Math.round((index + 1) / exportPages.length * 100));
       }
-      const wordDocument = new Document({ creator: "AK Scan", description: "Tài liệu Word có thể chỉnh sửa được chuyển đổi từ PDF trên thiết bị.", styles: { default: { document: { run: { font: "Arial", size: 22, language: { value: "en-US" } }, paragraph: { spacing: { after: 120, line: 276 } } } } }, sections: [{ children: paragraphs }] });
+      const wordDocument = new Document({ creator: "AK Scan", description: "Tài liệu Word có thể chỉnh sửa được chuyển đổi từ PDF trên thiết bị.", styles: { default: { document: { run: { font: "Arial", size: 22, language: { value: "en-US" } }, paragraph: { spacing: { after: 120, line: 276 } } } } }, numbering: { config: [{ reference: "ak-numbered-list", levels: [{ level: 0, format: LevelFormat.DECIMAL, text: "%1.", alignment: AlignmentType.LEFT, start: 1, style: { paragraph: { indent: { left: 720, hanging: 360 } } } }] }] }, sections: [{ children: paragraphs }] });
       const blob = await Packer.toBlob(wordDocument);
       downloadBlob(blob, `ak-scan-word-${new Date().toISOString().slice(0, 10)}.docx`);
     } finally {
-      await worker?.terminate();
+      if (worker) activeOcrWorkers.current.delete(worker);
+      try { await worker?.terminate(); } catch { /* Cancellation may have already stopped this worker. */ }
     }
   }
 
@@ -517,9 +630,12 @@ export function ScanWorkspace() {
 
   function clearSession() {
     if (exporting) return;
-    pages.forEach((p) => { URL.revokeObjectURL(p.url); objectUrls.current.delete(p.url); });
+    importSession.current.cancel();
+    objectUrls.current.forEach((url) => URL.revokeObjectURL(url));
+    objectUrls.current.clear();
     setPages([]);
     setActiveId("");
+    setImporting(false);
     setMessage("Đã xóa toàn bộ phiên làm việc.");
   }
 
@@ -536,8 +652,8 @@ export function ScanWorkspace() {
             <div className="panel-heading">
               <div><span>TRANG</span><strong>{pages.length}/20</strong></div>
               <div className="panel-add-actions">
-                <button onClick={() => fileRef.current?.click()} aria-label="Thêm ảnh" title="Thêm ảnh"><ImagePlus size={18} /></button>
-                <button onClick={() => pdfRef.current?.click()} aria-label="Thêm PDF" title="Thêm PDF"><FileText size={17} /></button>
+                <button disabled={importing} onClick={() => fileRef.current?.click()} aria-label="Thêm ảnh" title="Thêm ảnh"><ImagePlus size={18} /></button>
+                <button disabled={importing} onClick={() => pdfRef.current?.click()} aria-label="Thêm PDF" title="Thêm PDF"><FileText size={17} /></button>
               </div>
             </div>
             <input ref={fileRef} className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(e) => { if (e.target.files) void addFiles(e.target.files); e.target.value = ""; }} />
@@ -617,7 +733,7 @@ export function ScanWorkspace() {
               <button className="button primary export" onClick={() => setExportOpen(true)} disabled={exporting}>
                 {exporting ? <><span className="spinner light" /> Đang xử lý {progress}%</> : <><Download size={18} /> Tùy chọn & tải {exportOptions.format === "docx" ? "Word" : "PDF"}</>}
               </button>
-              {exporting && <><div className="progress"><span style={{ transform: `scaleX(${progress / 100})` }} /></div><button className="cancel-export" onClick={() => { cancelExport.current = true; }}>Hủy xuất</button></>}
+              {exporting && <><div className="progress"><span style={{ transform: `scaleX(${progress / 100})` }} /></div><button className="cancel-export" onClick={cancelCurrentExport}>Hủy xuất</button></>}
             </div>
           </aside>
         </section>

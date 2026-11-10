@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { buildContentSecurityPolicy } from "@/workflow/shared/core/security-policy";
 
 const repositoryOwner = process.env.GITHUB_REPOSITORY_OWNER;
 const repositoryName = process.env.GITHUB_REPOSITORY?.split("/")[1];
@@ -37,19 +38,9 @@ export const metadata: Metadata = {
   },
 };
 
-const staticContentSecurityPolicy = [
-  "default-src 'self'",
-  `script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'${process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : ""}`,
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' blob: data:",
-  "font-src 'self' data:",
-  "connect-src 'self' blob: data:",
-  "worker-src 'self' blob:",
-  "object-src 'none'",
-  "base-uri 'self'",
-  "form-action 'self'",
-  ...(process.env.NODE_ENV === "development" ? [] : ["upgrade-insecure-requests"]),
-].join("; ");
+const staticContentSecurityPolicy = buildContentSecurityPolicy({
+  isDevelopment: process.env.NODE_ENV === "development",
+});
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return <html lang="vi"><head><meta httpEquiv="Content-Security-Policy" content={staticContentSecurityPolicy} /></head><body>{children}</body></html>;

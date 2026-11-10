@@ -32,7 +32,7 @@ jobs:
         run: npm ci
 
       - name: Audit dependencies
-        run: npm run security:audit
+        run: npm audit --audit-level=high
 
       - name: Verify source and run unit tests
         run: npm run lint && npm run typecheck && npm test

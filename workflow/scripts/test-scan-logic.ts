@@ -18,6 +18,7 @@ import {
   shouldPreserveDocumentColor,
   isDarkInkOnColoredSurface,
   sharpenChannel,
+  ocrPreprocessFilters,
   restoreColoredSurfaceChannel,
   estimateDocumentShadowSeverity,
   detectTableGrid,
@@ -318,6 +319,12 @@ runTest("document sharpening darkens ink without creating a white halo", () => {
   assertEquals(sharpenChannel(80, 20, .2, true), 68, "A dark stroke may be made darker");
   assertEquals(sharpenChannel(180, 300, .2, true), 180, "Bright overshoot around a stroke must be suppressed");
   assertEquals(sharpenChannel(180, 300, .2, false), 204, "Original-photo sharpening may retain symmetric detail enhancement");
+});
+
+runTest("OCR preprocessing retries weak scans with adaptive binary", () => {
+  assertEquals(ocrPreprocessFilters(97).join(","), "grayscale", "clean scan profile");
+  assertEquals(ocrPreprocessFilters(93).join(","), "grayscale,enhanced", "medium scan profile");
+  assertEquals(ocrPreprocessFilters(72).join(","), "grayscale,enhanced,bw", "weak scan profile");
 });
 
 runTest("neutral edge halos are reconstructed from the coloured surface hue", () => {

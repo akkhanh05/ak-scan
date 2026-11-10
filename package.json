@@ -9,12 +9,13 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test:scan": "tsx workflow/scripts/test-scan-logic.ts",
+    "test:import-session": "tsx workflow/scripts/test-import-session.ts",
     "test:ocr-quality": "tsx workflow/scripts/test-ocr-quality.ts",
     "test:ocr": "tsx workflow/scripts/test-ocr.ts",
     "test:pdf-to-word": "tsx workflow/scripts/test-pdf-to-word-contract.ts",
     "test:pdf-document": "tsx workflow/scripts/test-pdf-document.ts",
     "test:security": "tsx workflow/scripts/test-security.ts",
-    "test": "npm run test:scan && npm run test:security && npm run test:ocr && npm run test:ocr-quality && npm run test:pdf-document && npm run test:pdf-to-word",
+    "test": "npm run test:scan && npm run test:import-session && npm run test:security && npm run test:ocr && npm run test:ocr-quality && npm run test:pdf-document && npm run test:pdf-to-word",
     "security:audit": "npm audit --audit-level=moderate"
   },
   "dependencies": {

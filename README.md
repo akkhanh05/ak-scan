@@ -34,6 +34,10 @@ AK Scan là ứng dụng client-only: ảnh, PDF và nội dung OCR được x�
 
 > AK Scan không tải nội dung tài liệu lên máy chủ. Trình duyệt, extension đã cài và thư mục Downloads vẫn thuộc phạm vi bảo mật của thiết bị người dùng.
 
+### GitHub Pages and security headers
+
+GitHub Pages only serves static files and cannot apply the response headers configured by `next.config.ts`. The exported HTML includes the same baseline CSP through a meta tag, which protects script, style, image, font, connection and worker sources. Browser-enforced framing protection (`frame-ancestors` / `X-Frame-Options`), HSTS, `nosniff`, Referrer Policy, Permissions Policy and COOP require a host that supports response headers such as Cloudflare Pages, Vercel, or a server under your control.
+
 ### OWASP Top 10
 
 - **Broken Access Control, Authentication, CSRF, SSRF, SQL/command injection:** hiện không áp dụng vì AK Scan không có server, API, session, tài khoản hoặc database. Nếu kiến trúc này thay đổi, các kiểm soát trên phải được thiết kế và audit lại từ đầu.
@@ -69,8 +73,8 @@ Dependabot được cấu hình tại `.github/dependabot.yml`. Tài liệu chi 
 Yêu cầu Node.js 20+ và npm.
 
 ```bash
-git clone https://github.com/akkhanh/akscan.git
-cd akscan
+git clone https://github.com/akkhanh05/ak-scan.git
+cd ak-scan
 npm ci
 npm run dev
 ```
@@ -95,7 +99,7 @@ Repository đã có workflow tại `.github/workflows/deploy-pages.yml`.
 1. Vào **Settings → Pages** và chọn **GitHub Actions**.
 2. Push lên nhánh `main` hoặc chạy workflow thủ công.
 3. Với repository này, URL dự kiến là:
-   `https://akkhanh.github.io/akscan/`
+   `https://akkhanh05.github.io/ak-scan/`
 
 Nếu dùng tên miền riêng, cấu hình `NEXT_PUBLIC_SITE_URL` và thêm `public/CNAME` chứa tên miền chính thức.
 

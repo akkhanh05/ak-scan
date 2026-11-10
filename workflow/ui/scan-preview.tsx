@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Maximize2, ZoomIn, ZoomOut } from "lucide-react";
 import type { Corners, ScanPage } from "@/workflow/shared/core/scan";
 import { renderPage } from "@/workflow/shared/core/scan";
@@ -10,6 +10,7 @@ const cornerNames = ["trên trái", "trên phải", "dưới phải", "dưới t
 export function ScanPreview({ page, editing, showOriginal, onCornersChange }: { page: ScanPage; editing: boolean; showOriginal: boolean; onCornersChange: (corners: Corners) => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const documentRef = useRef<HTMLDivElement>(null);
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
   
   // Exclude page.corners from renderKey when editing/showOriginal to prevent canvas redraw & layout jitter on corner drag
   const renderKey = editing || showOriginal
@@ -18,7 +19,8 @@ export function ScanPreview({ page, editing, showOriginal, onCornersChange }: { 
     
   const [result, setResult] = useState({ key: "", error: "" });
   const [zoom, setZoom] = useState(1);
-  const [documentSize, setDocumentSize] = useState({ width: 0, height: 0 });
+  const [minZoom, setMinZoom] = useState(0.5);
+  const [fitSize, setFitSize] = useState({ width: 0, height: 0 });
   const loading = result.key !== renderKey;
   const error = result.key === renderKey ? result.error : "";
 
@@ -45,22 +47,44 @@ export function ScanPreview({ page, editing, showOriginal, onCornersChange }: { 
     return () => { live = false; };
   }, [page, editing, renderKey, showOriginal]);
 
+  const updateFitSize = useCallback(() => {
+    const canvas = canvasRef.current;
+    const scrollArea = scrollAreaRef.current;
+    if (!canvas?.width || !canvas.height || !scrollArea) return;
+    const styles = getComputedStyle(scrollArea);
+    const availableWidth = Math.max(1, scrollArea.clientWidth - parseFloat(styles.paddingLeft) - parseFloat(styles.paddingRight));
+    const availableHeight = Math.max(1, scrollArea.clientHeight - parseFloat(styles.paddingTop) - parseFloat(styles.paddingBottom));
+    const scale = Math.min(1, availableWidth / canvas.width, availableHeight / canvas.height);
+    setFitSize({ width: Math.max(1, canvas.width * scale), height: Math.max(1, canvas.height * scale) });
+  }, []);
+
   useEffect(() => {
-    const documentElement = documentRef.current;
-    if (!documentElement) return;
-    const updateSize = () => setDocumentSize({ width: documentElement.offsetWidth, height: documentElement.offsetHeight });
-    updateSize();
-    const observer = new ResizeObserver(updateSize);
-    observer.observe(documentElement);
+    const scrollArea = scrollAreaRef.current;
+    if (!scrollArea) return;
+    updateFitSize();
+    const observer = new ResizeObserver(updateFitSize);
+    observer.observe(scrollArea);
     return () => observer.disconnect();
-  }, [result.key]);
+  }, [result.key, updateFitSize]);
+
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 720px)");
+    const updateMinZoom = () => {
+      const nextMinZoom = media.matches ? 1 : 0.5;
+      setMinZoom(nextMinZoom);
+      setZoom((current) => Math.max(nextMinZoom, current));
+    };
+    updateMinZoom();
+    media.addEventListener("change", updateMinZoom);
+    return () => media.removeEventListener("change", updateMinZoom);
+  }, []);
 
   function zoomIn() {
     setZoom((z) => Math.min(3, Math.round((z + 0.25) * 100) / 100));
   }
 
   function zoomOut() {
-    setZoom((z) => Math.max(window.matchMedia("(max-width: 720px)").matches ? 1 : 0.5, Math.round((z - 0.25) * 100) / 100));
+    setZoom((z) => Math.max(minZoom, Math.round((z - 0.25) * 100) / 100));
   }
 
   function resetZoom() {
@@ -95,12 +119,12 @@ export function ScanPreview({ page, editing, showOriginal, onCornersChange }: { 
       {loading && <div className="preview-status"><span className="spinner" />Đang dựng bản scan…</div>}
       {error && <div className="preview-error" role="alert">{error}</div>}
 
-      <div className="preview-scroll-area" tabIndex={0} aria-label="Vùng tài liệu có thể cuộn ngang và dọc khi phóng to">
-        <div className="preview-zoom-sizer" style={{ width: documentSize.width ? documentSize.width * zoom : undefined, height: documentSize.height ? documentSize.height * zoom : undefined }}>
+      <div ref={scrollAreaRef} className="preview-scroll-area" tabIndex={0} aria-label="Vùng tài liệu tự co vừa khung và có thể cuộn khi phóng to">
+        <div className="preview-zoom-sizer" style={{ width: fitSize.width ? fitSize.width * zoom : undefined, height: fitSize.height ? fitSize.height * zoom : undefined }}>
           <div
             className="preview-document"
             ref={documentRef}
-            style={{ transform: `scale(${zoom})` }}
+            style={{ width: fitSize.width || undefined, height: fitSize.height || undefined, transform: `scale(${zoom})` }}
           >
           <canvas ref={canvasRef} role="img" aria-label={editing ? `Ảnh gốc để chỉnh bốn góc: ${page.name}` : `Bản xem trước ${page.name}`}>Trình duyệt không hỗ trợ Canvas.</canvas>
           {editing && <>
@@ -136,13 +160,13 @@ export function ScanPreview({ page, editing, showOriginal, onCornersChange }: { 
 
       {/* Floating Zoom Controls Bar with Interactive Slider */}
       <div className="zoom-controls-bar" aria-label="Bộ điều khiển thu phóng">
-        <button className="zoom-btn" onClick={zoomOut} disabled={zoom <= 0.5} title="Thu nhỏ (-25%)" aria-label="Thu nhỏ">
+        <button className="zoom-btn" onClick={zoomOut} disabled={zoom <= minZoom} title="Thu nhỏ (-25%)" aria-label="Thu nhỏ">
           <ZoomOut size={14} />
         </button>
 
         <input
           type="range"
-          min={typeof window !== "undefined" && window.matchMedia("(max-width: 720px)").matches ? 100 : 50}
+          min={minZoom * 100}
           max={300}
           step={5}
           value={Math.round(zoom * 100)}
@@ -156,11 +180,11 @@ export function ScanPreview({ page, editing, showOriginal, onCornersChange }: { 
           <ZoomIn size={14} />
         </button>
 
-        <button className="zoom-value-btn" onClick={resetZoom} title="Bấm để đặt lại về 100%">
+        <button className="zoom-value-btn" onClick={resetZoom} title="100% = vừa toàn bộ tài liệu trong khung xem">
           {Math.round(zoom * 100)}%
         </button>
 
-        <button className="zoom-btn reset-fit" onClick={resetZoom} title="Phóng/Thu vừa màn hình" aria-label="Vừa màn hình">
+        <button className="zoom-btn reset-fit" onClick={resetZoom} title="Hiển thị vừa toàn bộ tài liệu" aria-label="Vừa toàn bộ tài liệu">
           <Maximize2 size={13} />
         </button>
       </div>

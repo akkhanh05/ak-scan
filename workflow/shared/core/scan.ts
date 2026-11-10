@@ -2,6 +2,13 @@ import "client-only";
 import type { PdfTextItem } from "./ocr";
 
 export type FilterName = "enhanced" | "original" | "grayscale" | "bw";
+
+/** Select genuinely different image preparations for uncertain scan OCR. */
+export function ocrPreprocessFilters(confidence: number): Array<Extract<FilterName, "grayscale" | "enhanced" | "bw">> {
+  if (confidence >= 96) return ["grayscale"];
+  if (confidence >= 91) return ["grayscale", "enhanced"];
+  return ["grayscale", "enhanced", "bw"];
+}
 export type Point = { x: number; y: number };
 export type Corners = [Point, Point, Point, Point];
 

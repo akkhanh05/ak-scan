@@ -3,8 +3,10 @@ import {
   detectUploadKind,
   safeDisplayName,
   sanitizeDocumentText,
+  withOcrTimeout,
   withTimeout,
 } from "../shared/core/upload-security";
+import { buildContentSecurityPolicy, buildSecurityHeaders } from "../shared/core/security-policy";
 
 // Polyfill window for Node.js environment if needed
 if (typeof window === "undefined") {
@@ -29,6 +31,14 @@ async function runTests() {
   console.log("=========================================");
   console.log("   SECURITY & INPUT VALIDATION TESTS     ");
   console.log("=========================================\n");
+
+  const staticPolicy = buildContentSecurityPolicy({ isDevelopment: false });
+  const responsePolicy = buildContentSecurityPolicy({ isDevelopment: false, includeFrameAncestors: true });
+  const responseHeaders = buildSecurityHeaders(false);
+  assert(!staticPolicy.includes("frame-ancestors"), "Static CSP omits header-only frame-ancestors directive");
+  assert(responsePolicy.includes("frame-ancestors 'none'"), "Response CSP blocks framing");
+  assert(responseHeaders.some((header) => header.key === "X-Frame-Options" && header.value === "DENY"), "Response headers deny framing");
+  assert(responsePolicy.includes("wasm-unsafe-eval") && responsePolicy.includes("worker-src 'self' blob:"), "CSP retains WASM and worker support");
 
   // ---------------------------------------------------------
   // 1. detectUploadKind
@@ -184,6 +194,15 @@ async function runTests() {
     assert(fastResult === "success", "Promise completes before timeout", `Got ${fastResult}`);
   } catch (err: any) {
     assert(false, "Promise completes before timeout", `Unexpected error: ${err?.message}`);
+  }
+
+  let terminatedWorkerCount = 0;
+  try {
+    await withOcrTimeout({ terminate: async () => { terminatedWorkerCount++; } }, new Promise<string>(() => undefined), 20, "OCR timed out");
+    assert(false, "Hanging OCR should trigger timeout");
+  } catch (err: any) {
+    assert(err?.message === "OCR timed out", "OCR timeout keeps its readable message", `Got error: "${err?.message}"`);
+    assert(terminatedWorkerCount === 1, "OCR timeout terminates the worker", `Terminate calls: ${terminatedWorkerCount}`);
   }
 
   // Hanging promise (exceeds timeout)

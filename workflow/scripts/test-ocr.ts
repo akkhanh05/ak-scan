@@ -94,12 +94,30 @@ test("candidate scoring rejects visible OCR garbage despite similar confidence",
   const noisy = scoreOcrCandidate(": © P 8 er or later, i Soon your body will pay.", 92);
   expect(clean > noisy, true, "clean prose should beat a noisy higher-confidence candidate");
 });
+test("candidate scoring rejects long words fused by small italic OCR", () => {
+  const fused = "upstoremustoperate fortwoconsecutiveweeks Setupandoperationalcosts";
+  const clean = "up store must operate for two consecutive weeks. Setup and operational costs";
+  expect(scoreOcrCandidate(clean, 82) > scoreOcrCandidate(fused, 88), true, "clean spaced italic line should beat a higher-confidence fused line");
+});
 test("selects the cleanest OCR result independently for each visual line", () => {
   const bbox = { x0: 10, y0: 10, x1: 200, y1: 30 };
   const noisy = { text: "In modern life, it’s very casy to scroll pu", confidence: 91, bbox, words: [] };
   const clean = { text: "In modern life, it’s very easy to scroll", confidence: 90, bbox, words: [] };
   expect(selectBestOcrLines([[noisy], [clean]])[0].text, clean.text, "line consensus should prefer clean prose");
   expect(isSuspiciousOcrLine(noisy.text, noisy.confidence), true, "known malformed line should be retried");
+});
+test("does not swap simultaneous multi-column OCR rows", () => {
+  const left = { text: "Left column text", confidence: 86, bbox: { x0: 10, y0: 40, x1: 130, y1: 60 }, words: [] };
+  const right = { text: "Right column text", confidence: 98, bbox: { x0: 300, y0: 40, x1: 440, y1: 60 }, words: [] };
+  const alternateLeft = { ...left, text: "Clean left column text", confidence: 90 };
+  const result = selectBestOcrLines([[left, right], [alternateLeft]]);
+  expect(result.map((line) => line.text).join(" | "), "Clean left column text | Right column text", "candidate must only replace its matching horizontal region");
+});
+test("keeps a faint line discovered only by an alternate segmentation", () => {
+  const heading = { text: "Exam instructions", confidence: 93, bbox: { x0: 20, y0: 10, x1: 210, y1: 32 }, words: [] };
+  const faintItalic = { text: "Read every question carefully.", confidence: 75, bbox: { x0: 24, y0: 44, x1: 310, y1: 62 }, words: [] };
+  const result = selectBestOcrLines([[heading], [heading, faintItalic]]);
+  expect(result.map((line) => line.text).join(" | "), "Exam instructions | Read every question carefully.", "alternate-only line must not be dropped");
 });
 test("does not emit repeated OCR lines into searchable PDF or Word", () => {
   const line = "science shows that when you sacrifice your sleep, you create a dangerous debt. Sooner or later,";

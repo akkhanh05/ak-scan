@@ -52,3 +52,20 @@ export function withTimeout<T>(promise: Promise<T>, milliseconds: number, messag
   });
 }
 
+/** The small portion of an OCR worker needed to safely stop work in progress. */
+export type TerminableOcrWorker = { terminate: () => Promise<unknown> | unknown };
+
+/**
+ * OCR work happens in a Web Worker and a promise timeout alone would leave that
+ * worker consuming CPU/RAM in the background. Terminate it before propagating
+ * a recognition failure or timeout so the caller cannot silently continue it.
+ */
+export async function withOcrTimeout<T>(worker: TerminableOcrWorker, recognition: Promise<T>, milliseconds: number, message: string): Promise<T> {
+  try {
+    return await withTimeout(recognition, milliseconds, message);
+  } catch (error) {
+    try { await worker.terminate(); } catch { /* A worker may already be stopped by a user cancellation. */ }
+    throw error;
+  }
+}
+

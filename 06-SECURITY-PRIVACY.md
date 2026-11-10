@@ -48,6 +48,12 @@ Khi chạy bằng Next.js server, `next.config.ts` cấu hình:
 
 GitHub Pages là static hosting và không hỗ trợ `headers()` của Next.js. Workflow vẫn dùng HTTPS và SRI bundle, nhưng các custom response header trên không được áp dụng. Nếu cần policy đầy đủ, deploy qua hosting hỗ trợ header như Vercel, Cloudflare Pages hoặc server riêng.
 
+### CSP source of truth and GitHub Pages
+
+`workflow/shared/core/security-policy.ts` is the single source of truth for CSP. Next.js server deployments use it to set the complete response-header CSP, including `frame-ancestors 'none'`; the static export uses the same baseline directives through a meta tag. `frame-ancestors` is deliberately excluded from the meta-tag form because browsers enforce it only in an HTTP response header.
+
+GitHub Pages provides HTTPS but cannot add custom response headers to this static export. It therefore cannot enforce HSTS, `X-Frame-Options`, `X-Content-Type-Options`, Referrer Policy, Permissions Policy, COOP, or `frame-ancestors`. Deploy to a host with header configuration when those controls are required.
+
 ## 7. Dependency và supply chain
 
 - `package-lock.json` phải được commit và CI dùng `npm ci`.

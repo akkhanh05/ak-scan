@@ -131,7 +131,11 @@ export function scoreOcrCandidate(text: string, confidence: number) {
     || (/^[\p{L}\p{N}]$/u.test(token) && !/^(?:a|A|I)$/u.test(token))).length;
   const suspiciousJoins = normalized.match(/[.!?][A-Z][a-z]/g)?.length ?? 0;
   const malformedWords = normalized.match(/\b(?:pu|casy)\b/gi)?.length ?? 0;
-  return confidence + Math.min(8, tokens.length / 60) - noisy * 5 - suspiciousJoins * 3 - malformedWords * 6;
+  // Very long alphabetic tokens are normally several words fused together by
+  // OCR (common on small italic text). Penalize them so a cleaner recognition
+  // of that visual row wins even when its raw confidence is slightly lower.
+  const fusedWords = tokens.filter((token) => /^\p{L}{20,}$/u.test(token)).length;
+  return confidence + Math.min(8, tokens.length / 60) - noisy * 5 - suspiciousJoins * 3 - malformedWords * 6 - fusedWords * 10;
 }
 
 function height(word: OcrWord) { return word.bbox ? Math.max(1, word.bbox.y1 - word.bbox.y0) : 1; }
@@ -192,17 +196,42 @@ type PositionedLine = { words: Array<{ text: string; confidence: number; bbox: O
 
 export function selectBestOcrLines<T extends PositionedLine>(candidateSets: T[][]): T[] {
   const anchor = candidateSets.find((lines) => lines.length)?.slice().sort((a, b) => a.bbox.y0 - b.bbox.y0 || a.bbox.x0 - b.bbox.x0) ?? [];
+  const consumed = new Set<T>();
   const selected = anchor.map((line) => {
     const center = (line.bbox.y0 + line.bbox.y1) / 2;
     const lineHeight = Math.max(1, line.bbox.y1 - line.bbox.y0);
     const candidates = candidateSets.flatMap((lines) => lines.filter((candidate) => {
       const candidateCenter = (candidate.bbox.y0 + candidate.bbox.y1) / 2;
       const candidateHeight = Math.max(1, candidate.bbox.y1 - candidate.bbox.y0);
-      return Math.abs(candidateCenter - center) <= Math.max(lineHeight, candidateHeight) * 1.15;
+      const verticalMatch = Math.abs(candidateCenter - center) <= Math.max(lineHeight, candidateHeight) * 1.15;
+      // A multi-column scan can have two unrelated rows at the same y
+      // coordinate.  Require a meaningful horizontal match before allowing a
+      // candidate to replace the anchor row, otherwise a clean right-column
+      // result can silently replace the left column.
+      const overlap = Math.max(0, Math.min(candidate.bbox.x1, line.bbox.x1) - Math.max(candidate.bbox.x0, line.bbox.x0));
+      const narrowerWidth = Math.max(1, Math.min(candidate.bbox.x1 - candidate.bbox.x0, line.bbox.x1 - line.bbox.x0));
+      const horizontalMatch = overlap / narrowerWidth >= .22
+        || Math.abs((candidate.bbox.x0 + candidate.bbox.x1) / 2 - (line.bbox.x0 + line.bbox.x1) / 2) <= Math.max(lineHeight, candidateHeight) * 2.5;
+      return verticalMatch && horizontalMatch;
     }));
-    return candidates.reduce((best, candidate) => scoreOcrCandidate(candidate.text, candidate.confidence) > scoreOcrCandidate(best.text, best.confidence) ? candidate : best, line);
+    candidates.forEach((candidate) => consumed.add(candidate));
+    const best = candidates.reduce((current, candidate) => scoreOcrCandidate(candidate.text, candidate.confidence) > scoreOcrCandidate(current.text, current.confidence) ? candidate : current, line);
+    consumed.add(best);
+    return best;
   });
-  return selected.filter((line, index) => !selected.slice(0, index).some((previous) => {
+  // Some segmentation modes find a complete row that the first OCR pass
+  // misses. Preserve it when it does not geometrically duplicate an anchor.
+  // This is common for a small italic subtitle or a faint table row.
+  const residual = candidateSets.flat().filter((line) => !consumed.has(line) && scoreOcrCandidate(line.text, line.confidence) >= 58)
+    .filter((line) => !selected.some((previous) => {
+      const sameText = normalizeOcrText(previous.text).toLocaleLowerCase() === normalizeOcrText(line.text).toLocaleLowerCase();
+      const previousCenter = (previous.bbox.y0 + previous.bbox.y1) / 2;
+      const center = (line.bbox.y0 + line.bbox.y1) / 2;
+      const maxHeight = Math.max(1, previous.bbox.y1 - previous.bbox.y0, line.bbox.y1 - line.bbox.y0);
+      const overlap = Math.max(0, Math.min(previous.bbox.x1, line.bbox.x1) - Math.max(previous.bbox.x0, line.bbox.x0));
+      return sameText && Math.abs(previousCenter - center) <= maxHeight * .8 && overlap > 0;
+    }));
+  return [...selected, ...residual].sort((a, b) => a.bbox.y0 - b.bbox.y0 || a.bbox.x0 - b.bbox.x0).filter((line, index, lines) => !lines.slice(0, index).some((previous) => {
     const sameText = normalizeOcrText(previous.text).toLocaleLowerCase() === normalizeOcrText(line.text).toLocaleLowerCase();
     const height = Math.max(1, line.bbox.y1 - line.bbox.y0, previous.bbox.y1 - previous.bbox.y0);
     const sameRow = Math.abs((previous.bbox.y0 + previous.bbox.y1) / 2 - (line.bbox.y0 + line.bbox.y1) / 2) <= height * .8;
