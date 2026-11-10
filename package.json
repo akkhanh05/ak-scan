@@ -3,19 +3,24 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "predev": "node workflow/scripts/sync-runtime-assets.mjs",
     "dev": "next dev",
+    "prebuild": "node workflow/scripts/sync-runtime-assets.mjs",
     "build": "next build",
+    "postbuild": "node workflow/scripts/postbuild.mjs",
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
+    "headers:sync": "tsx workflow/scripts/host-headers.ts",
     "test:scan": "tsx workflow/scripts/test-scan-logic.ts",
     "test:import-session": "tsx workflow/scripts/test-import-session.ts",
-    "test:ocr-quality": "tsx workflow/scripts/test-ocr-quality.ts",
     "test:ocr": "tsx workflow/scripts/test-ocr.ts",
-    "test:pdf-to-word": "tsx workflow/scripts/test-pdf-to-word-contract.ts",
-    "test:pdf-document": "tsx workflow/scripts/test-pdf-document.ts",
+    "test:ocr-accuracy": "tsx workflow/scripts/test-ocr-accuracy.ts",
+    "test:pdf-layout": "tsx workflow/scripts/test-pdf-layout.ts",
+    "test:export": "tsx workflow/scripts/test-export.ts",
     "test:security": "tsx workflow/scripts/test-security.ts",
-    "test": "npm run test:scan && npm run test:import-session && npm run test:security && npm run test:ocr && npm run test:ocr-quality && npm run test:pdf-document && npm run test:pdf-to-word",
+    "test": "npm run test:scan && npm run test:import-session && npm run test:security && npm run test:ocr && npm run test:pdf-layout && npm run test:export && npm run test:ocr-accuracy",
+    "test:e2e": "playwright test",
     "security:audit": "npm audit --audit-level=moderate"
   },
   "dependencies": {
@@ -34,13 +39,19 @@
     "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.56.1",
     "@types/node": "^22.10.5",
     "@types/react": "^19.0.3",
     "@types/react-dom": "^19.0.2",
+    "esbuild": "^0.28.2",
     "eslint": "^9.39.0",
     "eslint-config-next": "^16.3.0",
     "tsx": "^4.23.12",
     "typescript": "^5.7.2"
+  },
+  "overrides": {
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": "^11.0.5"
+    }
   }
 }
-

@@ -1,7 +1,94 @@
-import "client-only";
-import type { PdfTextItem } from "./ocr";
+/**
+ * Pixel pipeline for scanned pages. It runs unchanged on the main thread
+ * (HTMLCanvasElement) or inside the render Web Worker (OffscreenCanvas), so it
+ * must not touch `document`, `Image` or CSS canvas filters (`ctx.filter` is not
+ * implemented by Safari before 18 and would silently skip the blur).
+ */
+import type { PdfGraphics, PdfTextItem } from "./pdf-document";
+import { defaultCorners, projectUnitToQuad } from "./page-geometry";
+import type { Corners, Point } from "./page-geometry";
+
+export { defaultCorners, projectUnitToQuad };
+export type { Corners, Point };
 
 export type FilterName = "enhanced" | "original" | "grayscale" | "bw";
+
+export type Surface = HTMLCanvasElement | OffscreenCanvas;
+type Context2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+type ImageSource = ImageBitmap | HTMLImageElement;
+
+export function createCanvas(width = 1, height = 1): Surface {
+  if (typeof OffscreenCanvas !== "undefined" && typeof document === "undefined") return new OffscreenCanvas(Math.max(1, width), Math.max(1, height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, width);
+  canvas.height = Math.max(1, height);
+  return canvas;
+}
+
+export function get2d(canvas: Surface, options?: CanvasRenderingContext2DSettings): Context2D | null {
+  return (canvas as HTMLCanvasElement).getContext("2d", options) as Context2D | null;
+}
+
+/** Decodes an image (honouring EXIF orientation) from a blob: URL. */
+async function loadImage(url: string): Promise<ImageSource> {
+  if (typeof createImageBitmap === "function") {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error("Không thể đọc ảnh này.");
+    const blob = await response.blob();
+    try { return await createImageBitmap(blob, { imageOrientation: "from-image" }); }
+    catch { return await createImageBitmap(blob); }
+  }
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image(); image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Không thể đọc ảnh này.")); image.src = url;
+  });
+}
+
+function releaseSource(image: ImageSource) {
+  if ("close" in image && typeof image.close === "function") image.close();
+}
+
+/** Three box-blur passes approximate a Gaussian blur of the given radius. */
+export function blurRgba(pixels: Uint8ClampedArray, width: number, height: number, radius: number) {
+  const r = Math.max(1, Math.round(radius / 1.7));
+  const temp = new Float32Array(pixels.length);
+  const pass = (source: ArrayLike<number>, target: Float32Array | Uint8ClampedArray, horizontal: boolean) => {
+    const outer = horizontal ? height : width, inner = horizontal ? width : height;
+    for (let o = 0; o < outer; o++) {
+      for (let channel = 0; channel < 3; channel++) {
+        let sum = 0;
+        const index = (i: number) => {
+          const clamped = Math.max(0, Math.min(inner - 1, i));
+          return (horizontal ? o * width + clamped : clamped * width + o) * 4 + channel;
+        };
+        for (let i = -r; i <= r; i++) sum += source[index(i)];
+        for (let i = 0; i < inner; i++) {
+          target[horizontal ? (o * width + i) * 4 + channel : (i * width + o) * 4 + channel] = sum / (2 * r + 1);
+          sum += source[index(i + r + 1)] - source[index(i - r)];
+        }
+      }
+    }
+  };
+  for (let iteration = 0; iteration < 3; iteration++) {
+    pass(pixels, temp, true);
+    pass(temp, pixels, false);
+  }
+}
+
+/** Downscales a surface into a small, blurred RGBA map of the paper background. */
+function backgroundMap(canvas: Surface, mapWidth: number, blurRadius: number) {
+  const mapHeight = Math.max(1, Math.round(canvas.height / Math.max(canvas.width, 1) * mapWidth));
+  const reduced = createCanvas(mapWidth, mapHeight);
+  const reducedCtx = get2d(reduced, { willReadFrequently: true });
+  if (!reducedCtx) return null;
+  reducedCtx.imageSmoothingEnabled = true;
+  reducedCtx.imageSmoothingQuality = "high";
+  reducedCtx.drawImage(canvas, 0, 0, mapWidth, mapHeight);
+  const data = reducedCtx.getImageData(0, 0, mapWidth, mapHeight);
+  blurRgba(data.data, mapWidth, mapHeight, blurRadius);
+  reduced.width = 0; reduced.height = 0;
+  return { map: data.data, mapWidth, mapHeight };
+}
 
 /** Select genuinely different image preparations for uncertain scan OCR. */
 export function ocrPreprocessFilters(confidence: number): Array<Extract<FilterName, "grayscale" | "enhanced" | "bw">> {
@@ -9,9 +96,6 @@ export function ocrPreprocessFilters(confidence: number): Array<Extract<FilterNa
   if (confidence >= 91) return ["grayscale", "enhanced"];
   return ["grayscale", "enhanced", "bw"];
 }
-export type Point = { x: number; y: number };
-export type Corners = [Point, Point, Point, Point];
-
 export interface ScanSettings {
   filter: FilterName;
   brightness: number;
@@ -31,16 +115,18 @@ export interface ScanPage {
   corners: Corners;
   settings: ScanSettings;
   qualityWarning?: string;
-  embeddedText?: string;
-  embeddedTextItems?: PdfTextItem[];
+  /** "document": a PDF page with a usable text layer. "scan": an image-only PDF page. */
   pdfKind?: "document" | "scan";
+  /** Text layer and drawing graphics of a PDF page, in PDF points. */
+  pdfPage?: { width: number; height: number; items: PdfTextItem[]; graphics: PdfGraphics };
+  /** Decoded size of the source image in pixels. */
+  sourceWidth?: number;
+  sourceHeight?: number;
   sourcePixels?: number;
 }
 
-export const defaultCorners: Corners = [
-  { x: 0.005, y: 0.005 }, { x: 0.995, y: 0.005 },
-  { x: 0.995, y: 0.995 }, { x: 0.005, y: 0.995 }
-];
+/** Plain-data copy of a page that can be posted to the render worker. */
+export type RenderablePage = Pick<ScanPage, "url" | "rotation" | "fineRotation" | "dewarp" | "corners" | "settings" | "pdfKind">;
 
 export const defaultSettings: ScanSettings = {
   filter: "original",
@@ -55,13 +141,6 @@ export interface DetectionResult { corners: Corners; confidence: number; }
 export interface QualityResult { warning?: string; sharpness: number; }
 export interface TableGrid { xLines: number[]; yLines: number[]; }
 
-async function loadImage(url: string) {
-  return new Promise<HTMLImageElement>((resolve, reject) => {
-    const image = new Image(); image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error("Không thể đọc ảnh này.")); image.src = url;
-  });
-}
-
 export function percentile(values: number[], ratio: number) {
   const sorted = [...values].sort((a, b) => a - b);
   return sorted[Math.max(0, Math.min(sorted.length - 1, Math.floor(sorted.length * ratio)))] ?? 0;
@@ -70,12 +149,13 @@ export function percentile(values: number[], ratio: number) {
 export async function analyzeImageQuality(url: string, width: number, height: number): Promise<QualityResult> {
   const image = await loadImage(url);
   const scale = Math.min(1, 380 / Math.max(width, height));
-  const canvas = document.createElement("canvas");
+  const canvas = createCanvas();
   canvas.width = Math.max(1, Math.round(width * scale));
   canvas.height = Math.max(1, Math.round(height * scale));
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  const ctx = get2d(canvas, { willReadFrequently: true });
   if (!ctx) return { warning: "Không thể kiểm tra chất lượng", sharpness: 0 };
   ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+  releaseSource(image);
   const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
   const gray = new Float32Array(canvas.width * canvas.height);
   let dark = 0, blown = 0;
@@ -104,8 +184,8 @@ export async function analyzeImageQuality(url: string, width: number, height: nu
   return { warning: warnings.slice(0, 2).join(" · ") || undefined, sharpness };
 }
 
-export function detectTableGrid(canvas: HTMLCanvasElement): TableGrid | null {
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+export function detectTableGrid(canvas: Surface): TableGrid | null {
+  const ctx = get2d(canvas, { willReadFrequently: true });
   if (!ctx) return null;
   const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
   const dark = (x: number, y: number) => {
@@ -149,10 +229,11 @@ export function detectTableGrid(canvas: HTMLCanvasElement): TableGrid | null {
 
 async function detectDocumentCornersLegacy(url: string): Promise<DetectionResult> {
   const image = await loadImage(url);
-  const scale = Math.min(1, 420 / Math.max(image.naturalWidth, image.naturalHeight));
-  const canvas = document.createElement("canvas"); canvas.width = Math.round(image.naturalWidth * scale); canvas.height = Math.round(image.naturalHeight * scale);
-  const ctx = canvas.getContext("2d", { willReadFrequently: true }); if (!ctx) throw new Error("Không thể phân tích ảnh.");
+  const scale = Math.min(1, 420 / Math.max(image.width, image.height));
+  const canvas = createCanvas(); canvas.width = Math.round(image.width * scale); canvas.height = Math.round(image.height * scale);
+  const ctx = get2d(canvas, { willReadFrequently: true }); if (!ctx) throw new Error("Không thể phân tích ảnh.");
   ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+  releaseSource(image);
   const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
   const luminance = new Float32Array(canvas.width * canvas.height);
   for (let i = 0, p = 0; i < data.length; i += 4, p++) luminance[p] = data[i] * .299 + data[i + 1] * .587 + data[i + 2] * .114;
@@ -212,13 +293,14 @@ export function intersectLines(first: DetectedLine, second: DetectedLine): Point
 
 export async function detectDocumentCorners(url: string): Promise<DetectionResult> {
   const image = await loadImage(url);
-  const scale = Math.min(1, 480 / Math.max(image.naturalWidth, image.naturalHeight));
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
-  canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  const scale = Math.min(1, 480 / Math.max(image.width, image.height));
+  const canvas = createCanvas();
+  canvas.width = Math.max(1, Math.round(image.width * scale));
+  canvas.height = Math.max(1, Math.round(image.height * scale));
+  const ctx = get2d(canvas, { willReadFrequently: true });
   if (!ctx) return detectDocumentCornersLegacy(url);
   ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+  releaseSource(image);
   const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
   const luminance = new Float32Array(canvas.width * canvas.height);
   for (let i = 0, pixel = 0; i < data.length; i += 4, pixel++) {
@@ -331,16 +413,6 @@ export async function detectDocumentCorners(url: string): Promise<DetectionResul
   return { corners, confidence: Math.max(.3, Math.min(.96, .42 + area * .35 + normalizedLineScore * .2)) };
 }
 
-export function canvasFilter(settings: ScanSettings) {
-  // Enhanced mode performs its tone mapping after perspective correction so it
-  // can use a local paper/background estimate instead of a global CSS filter.
-  if (settings.filter === "enhanced" || settings.filter === "grayscale" || settings.filter === "bw") return "none";
-  const saturation = settings.filter === "original" ? 1 : 0;
-  const contrast = 100 + settings.contrast;
-  const brightness = 100 + settings.brightness + settings.whiten * 0.18;
-  return `grayscale(${1 - saturation}) contrast(${contrast}%) brightness(${brightness}%)`;
-}
-
 export function correctShadowChannel(original: number, localPaper: number, shadowStrength: number) {
   const paper = Math.max(18, localPaper);
   const ratioCorrected = original * 242 / paper;
@@ -398,28 +470,15 @@ export function estimateDocumentShadowSeverity(background: Uint8ClampedArray) {
   return Math.max(0, Math.min(1, Math.max(absoluteDarkness, unevenness)));
 }
 
-function enhanceCleanDocumentClassic(canvas: HTMLCanvasElement, settings: ScanSettings) {
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+function enhanceCleanDocumentClassic(canvas: Surface, settings: ScanSettings) {
+  const ctx = get2d(canvas, { willReadFrequently: true });
   if (!ctx) return;
-  const mapWidth = Math.min(96, canvas.width);
-  const mapHeight = Math.max(1, Math.round(canvas.height / Math.max(canvas.width, 1) * mapWidth));
-  const reduced = document.createElement("canvas");
-  reduced.width = mapWidth; reduced.height = mapHeight;
-  const reducedCtx = reduced.getContext("2d");
-  if (!reducedCtx) return;
-  reducedCtx.imageSmoothingEnabled = true;
-  reducedCtx.imageSmoothingQuality = "high";
-  reducedCtx.drawImage(canvas, 0, 0, mapWidth, mapHeight);
-  const background = document.createElement("canvas");
-  background.width = mapWidth; background.height = mapHeight;
-  const backgroundCtx = background.getContext("2d", { willReadFrequently: true });
-  if (!backgroundCtx) return;
-  backgroundCtx.filter = `blur(${Math.max(3, Math.round(mapWidth / 24))}px)`;
-  backgroundCtx.drawImage(reduced, 0, 0);
-  backgroundCtx.filter = "none";
+  const requestedWidth = Math.min(96, canvas.width);
+  const background = backgroundMap(canvas, requestedWidth, Math.max(3, Math.round(requestedWidth / 24)));
+  if (!background) return;
+  const { map, mapWidth, mapHeight } = background;
   const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const pixels = image.data;
-  const map = backgroundCtx.getImageData(0, 0, mapWidth, mapHeight).data;
   const shadowStrength = Math.min(1, .62 + settings.removeShadow / 90);
   const contrast = 1.12 + settings.contrast / 160;
   const whitePoint = 242 - settings.whiten * .22;
@@ -444,39 +503,23 @@ function enhanceCleanDocumentClassic(canvas: HTMLCanvasElement, settings: ScanSe
   ctx.putImageData(image, 0, 0);
 }
 
-function enhanceDocument(canvas: HTMLCanvasElement, settings: ScanSettings) {
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+function enhanceDocument(canvas: Surface, settings: ScanSettings) {
+  const ctx = get2d(canvas, { willReadFrequently: true });
   if (!ctx) return;
 
   // Keep enough spatial detail to capture narrow phone/hand shadows. At this
   // scale a 3px blur removes glyphs but does not average a dark shadow into the
   // surrounding white sheet as the old 96px map did.
-  const mapWidth = Math.min(384, canvas.width);
-  const mapHeight = Math.max(1, Math.round(canvas.height / Math.max(canvas.width, 1) * mapWidth));
-  const reduced = document.createElement("canvas");
-  reduced.width = mapWidth;
-  reduced.height = mapHeight;
-  const reducedCtx = reduced.getContext("2d");
-  if (!reducedCtx) return;
-  reducedCtx.imageSmoothingEnabled = true;
-  reducedCtx.imageSmoothingQuality = "high";
-  reducedCtx.drawImage(canvas, 0, 0, mapWidth, mapHeight);
-
   // Blur at map scale removes letters and table lines, leaving the colour and
   // brightness of the paper under each area of the photographed page.
-  const background = document.createElement("canvas");
-  background.width = mapWidth;
-  background.height = mapHeight;
-  const backgroundCtx = background.getContext("2d", { willReadFrequently: true });
-  if (!backgroundCtx) return;
-  backgroundCtx.filter = `blur(${Math.max(4, Math.round(mapWidth / 96))}px)`;
-  backgroundCtx.drawImage(reduced, 0, 0);
-  backgroundCtx.filter = "none";
+  const requestedWidth = Math.min(384, canvas.width);
+  const background = backgroundMap(canvas, requestedWidth, Math.max(4, Math.round(requestedWidth / 96)));
+  if (!background) return;
+  const { map, mapWidth, mapHeight } = background;
 
   const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const pixels = image.data;
   const sourcePixels = new Uint8ClampedArray(pixels);
-  const map = backgroundCtx.getImageData(0, 0, mapWidth, mapHeight).data;
   const shadowSeverity = estimateDocumentShadowSeverity(map);
   // Ordinary phone illumination (including the reference blue-table page) can
   // score around .55 and is handled better by the classic 96px background map.
@@ -549,8 +592,8 @@ function enhanceDocument(canvas: HTMLCanvasElement, settings: ScanSettings) {
   return true;
 }
 
-function convertToGrayscale(canvas: HTMLCanvasElement) {
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+function convertToGrayscale(canvas: Surface) {
+  const ctx = get2d(canvas, { willReadFrequently: true });
   if (!ctx) return;
   const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
   for (let i = 0; i < image.data.length; i += 4) {
@@ -565,28 +608,15 @@ export function distance(a: Point, b: Point, width: number, height: number) {
   return Math.hypot((a.x - b.x) * width, (a.y - b.y) * height);
 }
 
-export function projectUnitToQuad(corners: Corners, u: number, v: number): Point {
-  const [p0, p1, p2, p3] = corners;
-  const dx1 = p1.x - p2.x, dx2 = p3.x - p2.x, dx3 = p0.x - p1.x + p2.x - p3.x;
-  const dy1 = p1.y - p2.y, dy2 = p3.y - p2.y, dy3 = p0.y - p1.y + p2.y - p3.y;
-  const denominator = dx1 * dy2 - dx2 * dy1;
-  const g = Math.abs(denominator) < 1e-8 ? 0 : (dx3 * dy2 - dx2 * dy3) / denominator;
-  const h = Math.abs(denominator) < 1e-8 ? 0 : (dx1 * dy3 - dx3 * dy1) / denominator;
-  const a = p1.x - p0.x + g * p1.x, b = p3.x - p0.x + h * p3.x;
-  const d = p1.y - p0.y + g * p1.y, e = p3.y - p0.y + h * p3.y;
-  const scale = 1 + g * u + h * v;
-  return { x: (p0.x + a * u + b * v) / scale, y: (p0.y + d * u + e * v) / scale };
-}
-
-function warpPerspective(source: HTMLCanvasElement, corners: Corners, maxEdge: number) {
+function warpPerspective(source: Surface, corners: Corners, maxEdge: number) {
   const wantedW = Math.max(distance(corners[0], corners[1], source.width, source.height), distance(corners[3], corners[2], source.width, source.height));
   const wantedH = Math.max(distance(corners[0], corners[3], source.width, source.height), distance(corners[1], corners[2], source.width, source.height));
   const scale = Math.min(1, maxEdge / Math.max(wantedW, wantedH));
   const width = Math.max(1, Math.round(wantedW * scale));
   const height = Math.max(1, Math.round(wantedH * scale));
-  const output = document.createElement("canvas");
+  const output = createCanvas();
   output.width = width; output.height = height;
-  const out = output.getContext("2d", { alpha: false });
+  const out = get2d(output, { alpha: false });
   if (!out) throw new Error("Trình duyệt không hỗ trợ chỉnh phối cảnh.");
   out.imageSmoothingEnabled = true;
   out.imageSmoothingQuality = "high";
@@ -628,13 +658,13 @@ function warpPerspective(source: HTMLCanvasElement, corners: Corners, maxEdge: n
 const skewAngleCache = new Map<string, number>();
 const curvatureCache = new Map<string, number[] | null>();
 
-function estimatePageCurvature(canvas: HTMLCanvasElement, cacheKey: string): number[] | null {
+function estimatePageCurvature(canvas: Surface, cacheKey: string): number[] | null {
   if (curvatureCache.has(cacheKey)) return curvatureCache.get(cacheKey) ?? null;
   const scale = Math.min(1, 560 / Math.max(canvas.width, canvas.height));
-  const sample = document.createElement("canvas");
+  const sample = createCanvas();
   sample.width = Math.max(1, Math.round(canvas.width * scale));
   sample.height = Math.max(1, Math.round(canvas.height * scale));
-  const ctx = sample.getContext("2d", { willReadFrequently: true });
+  const ctx = get2d(sample, { willReadFrequently: true });
   if (!ctx) return null;
   ctx.drawImage(canvas, 0, 0, sample.width, sample.height);
   const pixels = ctx.getImageData(0, 0, sample.width, sample.height).data;
@@ -738,13 +768,13 @@ function estimatePageCurvature(canvas: HTMLCanvasElement, cacheKey: string): num
   return result;
 }
 
-function flattenCurvedPage(canvas: HTMLCanvasElement, cacheKey: string) {
+function flattenCurvedPage(canvas: Surface, cacheKey: string) {
   const offsets = estimatePageCurvature(canvas, cacheKey);
   if (!offsets) return canvas;
-  const output = document.createElement("canvas");
+  const output = createCanvas();
   output.width = canvas.width;
   output.height = canvas.height;
-  const ctx = output.getContext("2d", { alpha: false });
+  const ctx = get2d(output, { alpha: false });
   if (!ctx) return canvas;
   ctx.fillStyle = "white";
   ctx.fillRect(0, 0, output.width, output.height);
@@ -777,14 +807,14 @@ function flattenCurvedPage(canvas: HTMLCanvasElement, cacheKey: string) {
   return output;
 }
 
-function estimateTextSkew(canvas: HTMLCanvasElement, cacheKey: string) {
+function estimateTextSkew(canvas: Surface, cacheKey: string) {
   const cached = skewAngleCache.get(cacheKey);
   if (cached !== undefined) return cached;
   const scale = Math.min(1, 620 / Math.max(canvas.width, canvas.height));
-  const sample = document.createElement("canvas");
+  const sample = createCanvas();
   sample.width = Math.max(1, Math.round(canvas.width * scale));
   sample.height = Math.max(1, Math.round(canvas.height * scale));
-  const ctx = sample.getContext("2d", { willReadFrequently: true });
+  const ctx = get2d(sample, { willReadFrequently: true });
   if (!ctx) return 0;
   ctx.drawImage(canvas, 0, 0, sample.width, sample.height);
   const pixels = ctx.getImageData(0, 0, sample.width, sample.height).data;
@@ -839,13 +869,13 @@ function estimateTextSkew(canvas: HTMLCanvasElement, cacheKey: string) {
   return result;
 }
 
-function straightenText(canvas: HTMLCanvasElement, cacheKey: string, fineRotation = 0) {
-  const angle = estimateTextSkew(canvas, cacheKey) + fineRotation;
+function straightenText(canvas: Surface, cacheKey: string, fineRotation = 0, autoSkew = true) {
+  const angle = (autoSkew ? estimateTextSkew(canvas, cacheKey) : 0) + fineRotation;
   if (angle === 0) return canvas;
-  const output = document.createElement("canvas");
+  const output = createCanvas();
   output.width = canvas.width;
   output.height = canvas.height;
-  const ctx = output.getContext("2d", { alpha: false });
+  const ctx = get2d(output, { alpha: false });
   if (!ctx) return canvas;
   ctx.fillStyle = "white";
   ctx.fillRect(0, 0, output.width, output.height);
@@ -866,9 +896,9 @@ export function sharpenChannel(original: number, highPass: number, strength: num
   return darkOnly ? Math.min(original, sharpened) : sharpened;
 }
 
-function sharpenCanvas(canvas: HTMLCanvasElement, amount: number, darkOnly = false) {
+function sharpenCanvas(canvas: Surface, amount: number, darkOnly = false) {
   if (amount <= 0) return;
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  const ctx = get2d(canvas, { willReadFrequently: true });
   if (!ctx) return;
   const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const src = new Uint8ClampedArray(image.data);
@@ -884,47 +914,40 @@ function sharpenCanvas(canvas: HTMLCanvasElement, amount: number, darkOnly = fal
   ctx.putImageData(image, 0, 0);
 }
 
-function normalizeIllumination(canvas: HTMLCanvasElement, amount: number) {
+function normalizeIllumination(canvas: Surface, amount: number) {
   if (amount <= 0) return;
-  const ctx = canvas.getContext("2d"); if (!ctx) return;
-  const map = document.createElement("canvas"); const mapW = 48, mapH = Math.max(32, Math.round(48 * canvas.height / canvas.width));
-  map.width = mapW; map.height = mapH; const mapCtx = map.getContext("2d", { willReadFrequently: true }); if (!mapCtx) return;
+  const ctx = get2d(canvas); if (!ctx) return;
+  const mapW = 48, mapH = Math.max(32, Math.round(48 * canvas.height / canvas.width));
+  const map = createCanvas(mapW, mapH);
+  const mapCtx = get2d(map, { willReadFrequently: true }); if (!mapCtx) return;
   mapCtx.drawImage(canvas, 0, 0, mapW, mapH); const image = mapCtx.getImageData(0, 0, mapW, mapH); const strength = amount / 100;
   for (let i = 0; i < image.data.length; i += 4) {
     const local = image.data[i] * .299 + image.data[i + 1] * .587 + image.data[i + 2] * .114;
     const lift = Math.max(0, Math.min(.34, (222 - local) / 255 * strength));
     image.data[i] = image.data[i + 1] = image.data[i + 2] = 255; image.data[i + 3] = Math.round(lift * 255);
   }
-  mapCtx.putImageData(image, 0, 0); ctx.save(); ctx.globalCompositeOperation = "screen"; ctx.filter = `blur(${Math.max(8, Math.round(Math.max(canvas.width, canvas.height) / 80))}px)`; ctx.drawImage(map, 0, 0, canvas.width, canvas.height); ctx.restore();
+  // Blur the lift map itself (alpha channel) so it is smooth once stretched.
+  const alpha = new Uint8ClampedArray(image.data.length);
+  for (let i = 0; i < image.data.length; i += 4) alpha[i] = alpha[i + 1] = alpha[i + 2] = image.data[i + 3];
+  blurRgba(alpha, mapW, mapH, 3);
+  for (let i = 0; i < image.data.length; i += 4) image.data[i + 3] = alpha[i];
+  mapCtx.putImageData(image, 0, 0);
+  ctx.save(); ctx.globalCompositeOperation = "screen"; ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(map, 0, 0, canvas.width, canvas.height); ctx.restore();
+  map.width = 0; map.height = 0;
 }
 
-function binaryBlackWhite(canvas: HTMLCanvasElement, settings: ScanSettings) {
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+function binaryBlackWhite(canvas: Surface, settings: ScanSettings) {
+  const ctx = get2d(canvas, { willReadFrequently: true });
   if (!ctx) return;
   const source = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const pixels = source.data;
 
   // Estimate the local surface colour. This lets a blue table cell become white
   // while retaining letters that are darker than that blue cell.
-  const mapWidth = Math.min(160, canvas.width);
-  const mapHeight = Math.max(1, Math.round(canvas.height / Math.max(canvas.width, 1) * mapWidth));
-  const reduced = document.createElement("canvas");
-  reduced.width = mapWidth;
-  reduced.height = mapHeight;
-  const reducedCtx = reduced.getContext("2d");
-  if (!reducedCtx) return;
-  reducedCtx.imageSmoothingEnabled = true;
-  reducedCtx.imageSmoothingQuality = "high";
-  reducedCtx.drawImage(canvas, 0, 0, mapWidth, mapHeight);
-  const background = document.createElement("canvas");
-  background.width = mapWidth;
-  background.height = mapHeight;
-  const backgroundCtx = background.getContext("2d", { willReadFrequently: true });
-  if (!backgroundCtx) return;
-  backgroundCtx.filter = "blur(2px)";
-  backgroundCtx.drawImage(reduced, 0, 0);
-  backgroundCtx.filter = "none";
-  const localMap = backgroundCtx.getImageData(0, 0, mapWidth, mapHeight).data;
+  const background = backgroundMap(canvas, Math.min(160, canvas.width), 2);
+  if (!background) return;
+  const { map: localMap, mapWidth, mapHeight } = background;
 
   const histogram = new Uint32Array(256);
   let luminanceSum = 0;
@@ -985,30 +1008,48 @@ async function yieldToBrowser() {
   });
 }
 
-export async function renderPage(page: ScanPage, maxEdge = 2400): Promise<HTMLCanvasElement> {
+export interface RenderOptions {
+  /** Upper bound for the decoded source surface (protects low-memory phones). */
+  maxSourcePixels?: number;
+}
+
+/**
+ * Renders a page: crop/perspective → (photos only) dewarp and auto-deskew →
+ * fine rotation → quarter turn → filter. The source is scaled from the size of
+ * the cropped region, not the whole photo, so a small document in a large
+ * photo keeps its detail.
+ */
+export async function renderPage(page: RenderablePage, maxEdge = 2400, options: RenderOptions = {}): Promise<Surface> {
   const image = await loadImage(page.url);
-  const sourceScale = Math.min(1, maxEdge / Math.max(image.naturalWidth, image.naturalHeight));
-  const source = document.createElement("canvas");
-  source.width = Math.max(1, Math.round(image.naturalWidth * sourceScale));
-  source.height = Math.max(1, Math.round(image.naturalHeight * sourceScale));
-  const sourceCtx = source.getContext("2d", { alpha: false });
+  const [c0, c1, c2, c3] = page.corners;
+  const cropWidth = Math.max(distance(c0, c1, image.width, image.height), distance(c3, c2, image.width, image.height));
+  const cropHeight = Math.max(distance(c0, c3, image.width, image.height), distance(c1, c2, image.width, image.height));
+  let sourceScale = Math.min(1, maxEdge / Math.max(1, cropWidth, cropHeight));
+  const maxSourcePixels = options.maxSourcePixels ?? 24_000_000;
+  if (image.width * image.height * sourceScale * sourceScale > maxSourcePixels) sourceScale = Math.sqrt(maxSourcePixels / (image.width * image.height));
+  const source = createCanvas(Math.max(1, Math.round(image.width * sourceScale)), Math.max(1, Math.round(image.height * sourceScale)));
+  const sourceCtx = get2d(source, { alpha: false });
   if (!sourceCtx) throw new Error("Trình duyệt không hỗ trợ xử lý ảnh.");
+  sourceCtx.imageSmoothingEnabled = true;
+  sourceCtx.imageSmoothingQuality = "high";
   sourceCtx.drawImage(image, 0, 0, source.width, source.height);
+  releaseSource(image);
   await yieldToBrowser();
   const warped = warpPerspective(source, page.corners, maxEdge);
+  source.width = 0; source.height = 0;
+  // A PDF page with a text layer is a flat, straight digital page: curvature
+  // and skew detection could only distort it (and would misplace its text layer).
+  const photo = page.pdfKind !== "document";
   const geometryKey = `${page.url}|${page.corners.map((point) => `${point.x.toFixed(4)},${point.y.toFixed(4)}`).join("|")}`;
-  const flattened = page.dewarp ? flattenCurvedPage(warped, geometryKey) : warped;
+  const flattened = photo && page.dewarp ? flattenCurvedPage(warped, geometryKey) : warped;
   await yieldToBrowser();
-  const straightened = straightenText(flattened, `${geometryKey}|dewarp:${page.dewarp ? 1 : 0}`, page.fineRotation ?? 0);
+  const straightened = straightenText(flattened, `${geometryKey}|dewarp:${page.dewarp ? 1 : 0}`, page.fineRotation ?? 0, photo);
   const rotated = page.rotation % 180 !== 0;
-  const canvas = document.createElement("canvas");
-  canvas.width = rotated ? straightened.height : straightened.width;
-  canvas.height = rotated ? straightened.width : straightened.height;
-  const ctx = canvas.getContext("2d", { alpha: false, willReadFrequently: true });
+  const canvas = createCanvas(rotated ? straightened.height : straightened.width, rotated ? straightened.width : straightened.height);
+  const ctx = get2d(canvas, { alpha: false, willReadFrequently: true });
   if (!ctx) throw new Error("Trình duyệt không hỗ trợ xử lý ảnh.");
   ctx.fillStyle = "white";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.filter = canvasFilter(page.settings);
   ctx.translate(canvas.width / 2, canvas.height / 2);
   ctx.rotate((page.rotation * Math.PI) / 180);
   ctx.drawImage(straightened, -straightened.width / 2, -straightened.height / 2);

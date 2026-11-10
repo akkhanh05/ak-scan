@@ -7,6 +7,12 @@ import {
   withTimeout,
 } from "../shared/core/upload-security";
 import { buildContentSecurityPolicy, buildSecurityHeaders } from "../shared/core/security-policy";
+import { imageDimensionsFromHeader } from "../shared/core/upload-security";
+import { OCR_ASSET_VERSION } from "../shared/core/ocr-config";
+import { cloudflareHeaders, vercelConfig } from "./host-headers";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { createHash } from "node:crypto";
 
 // Polyfill window for Node.js environment if needed
 if (typeof window === "undefined") {
@@ -229,6 +235,41 @@ async function runTests() {
       "Fast rejecting promise propagates original error correctly",
       `Got error: "${err?.message}"`
     );
+  }
+
+  // ----- Image header dimensions (checked before decoding) -----
+  console.log("\n[Image header size limits]");
+  const png = new Uint8Array(32);
+  png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
+  png.set([0, 0, 0x1f, 0x40, 0, 0, 0x17, 0x70], 16); // 8000 × 6000
+  const pngSize = imageDimensionsFromHeader(png, "png");
+  assert(pngSize?.width === 8000 && pngSize?.height === 6000, "PNG IHDR size is read without decoding");
+  const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe1, 0x00, 0x04, 0x00, 0x00, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x0f, 0xa0, 0x17, 0x70, 0x03, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  const jpegSize = imageDimensionsFromHeader(jpeg, "jpeg");
+  assert(jpegSize?.width === 6000 && jpegSize?.height === 4000, "JPEG SOF size is found after an APP1 segment", JSON.stringify(jpegSize));
+  const webp = new Uint8Array(30);
+  webp.set([0x52, 0x49, 0x46, 0x46, 22, 0, 0, 0, 0x57, 0x45, 0x42, 0x50, 0x56, 0x50, 0x38, 0x58]);
+  webp.set([0x3f, 0x1f, 0x00, 0x6f, 0x17, 0x00], 24); // 8000 × 6000 (minus one, 24-bit LE)
+  const webpSize = imageDimensionsFromHeader(webp, "webp");
+  assert(webpSize?.width === 8000 && webpSize?.height === 6000, "WebP VP8X canvas size is read", JSON.stringify(webpSize));
+  assert(imageDimensionsFromHeader(new Uint8Array([0xff, 0xd8, 0xff, 0xda]), "jpeg") === null, "JPEG without a frame header is rejected");
+
+  // ----- Host header files must match security-policy.ts -----
+  console.log("\n[Static host headers]");
+  const root = join(__dirname, "..", "..");
+  assert(readFileSync(join(root, "public", "_headers"), "utf8") === cloudflareHeaders(), "public/_headers matches security-policy.ts (run npm run headers:sync)");
+  assert(readFileSync(join(root, "vercel.json"), "utf8") === vercelConfig(), "vercel.json matches security-policy.ts (run npm run headers:sync)");
+  assert(cloudflareHeaders().includes("frame-ancestors 'none'") && cloudflareHeaders().includes("X-Frame-Options: DENY"), "static hosts get anti-framing headers");
+
+  // ----- OCR asset version consistency -----
+  console.log("\n[OCR asset versioning]");
+  const sw = readFileSync(join(root, "public", "sw.js"), "utf8");
+  const models = JSON.parse(readFileSync(join(root, "workflow", "ocr-models.json"), "utf8"));
+  assert(sw.includes(`const OCR_ASSET_VERSION = "${OCR_ASSET_VERSION}"`), "service worker cache key matches the OCR model version");
+  assert(models.version === OCR_ASSET_VERSION, "model manifest version matches ocr-config.ts");
+  for (const model of models.models) {
+    const digest = createHash("sha256").update(readFileSync(join(root, model.file))).digest("hex");
+    assert(digest === model.sha256, `bundled model ${model.file} matches its pinned checksum`);
   }
 
   console.log("\n=========================================");

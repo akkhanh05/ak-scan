@@ -1,6 +1,7 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { buildContentSecurityPolicy } from "@/workflow/shared/core/security-policy";
+import { ServiceWorkerRegistration } from "@/workflow/ui/service-worker";
 
 const repositoryOwner = process.env.GITHUB_REPOSITORY_OWNER;
 const repositoryName = process.env.GITHUB_REPOSITORY?.split("/")[1];
@@ -20,6 +21,7 @@ export const metadata: Metadata = {
   icons: {
     icon: [{ url: "favicon.ico" }, { url: "favicon-32x32.png", type: "image/png", sizes: "32x32" }],
     apple: [{ url: "apple-touch-icon.png", type: "image/png", sizes: "180x180" }],
+    other: [{ rel: "icon", url: "icon.svg", type: "image/svg+xml" }],
   },
   openGraph: {
     type: "website",
@@ -38,11 +40,21 @@ export const metadata: Metadata = {
   },
 };
 
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  colorScheme: "light dark",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#2563eb" },
+    { media: "(prefers-color-scheme: dark)", color: "#0b1220" },
+  ],
+};
+
 const staticContentSecurityPolicy = buildContentSecurityPolicy({
   isDevelopment: process.env.NODE_ENV === "development",
 });
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="vi"><head><meta httpEquiv="Content-Security-Policy" content={staticContentSecurityPolicy} /></head><body>{children}</body></html>;
+  return <html lang="vi"><head><meta httpEquiv="Content-Security-Policy" content={staticContentSecurityPolicy} /></head><body>{children}<ServiceWorkerRegistration /></body></html>;
 }
 

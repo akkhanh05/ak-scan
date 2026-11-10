@@ -7,22 +7,35 @@
   --color-ink: #0f172a;
   --color-ink-muted: #64748b;
   --color-ink-subtle: #94a3b8;
+  --color-ink-soft: #475569;
+  --color-ink-strong: #1e293b;
   
   --color-accent: #2563eb;
   --color-accent-hover: #1d4ed8;
   --color-accent-ink: #ffffff;
+  /* Filled buttons: white text must reach 4.5:1. */
+  --color-accent-fill: #1d4ed8;
+  --color-accent-fill-hover: #1e40af;
   --color-accent-soft: #eff6ff;
   --color-accent-border: #bfdbfe;
+  --color-accent-strong: #1e40af;
+  --color-accent-soft-strong: #dbeafe;
   
   --color-rule: #e2e8f0;
+  --color-inverse-surface: #0f172a;
+  --color-inverse-ink: #ffffff;
   --color-rule-dashed: #cbd5e1;
   
   --color-success: #10b981;
   --color-success-soft: #ecfdf5;
   --color-warning: #f59e0b;
   --color-warning-soft: #fffbeb;
+  --color-warning-ink: #854d0e;
+  --color-warning-border: #fde68a;
   --color-danger: #ef4444;
   --color-danger-soft: #fef2f2;
+  --color-danger-ink: #991b1b;
+  --color-danger-border: #fecaca;
   --color-focus: #3b82f6;
 
   /* One locally available stack for every UI role: no missing web-font fallback. */
@@ -74,3 +87,51 @@
   --rule-thin: 1px;
 }
 
+/* Dark theme: follows the system setting. The scanned page itself stays on a
+   white sheet so the preview shows what will be exported. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --color-paper: #0b1220;
+    --color-surface: #111a2e;
+    --color-surface-subtle: #16223a;
+    --color-surface-hover: #1f2d4a;
+    --color-ink: #e6edf7;
+    --color-ink-muted: #9fb0c8;
+    --color-ink-subtle: #7488a6;
+    --color-ink-soft: #b8c6da;
+    --color-ink-strong: #f1f5fb;
+
+    --color-accent: #7aa3f5;
+    --color-accent-hover: #9dbdf8;
+    --color-accent-ink: #ffffff;
+    --color-accent-fill: #3b6fd8;
+    --color-accent-fill-hover: #2f5fc4;
+    --color-accent-soft: #15254a;
+    --color-accent-border: #2c4a86;
+    --color-accent-strong: #a9c4fb;
+    --color-accent-soft-strong: #1c3060;
+
+    --color-rule: #24324d;
+    --color-inverse-surface: #1a2a4d;
+    --color-inverse-ink: #eef3fb;
+    --color-rule-dashed: #33456a;
+
+    --color-success: #34d399;
+    --color-success-soft: #0f2a24;
+    --color-warning: #fbbf24;
+    --color-warning-soft: #2b2310;
+    --color-warning-ink: #fcd34d;
+    --color-warning-border: #6b5418;
+    --color-danger: #f87171;
+    --color-danger-soft: #2d1416;
+    --color-danger-ink: #fca5a5;
+    --color-danger-border: #6b2a2e;
+    --color-focus: #7aa3f5;
+
+    --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 4px 12px -2px rgba(0, 0, 0, 0.45);
+    --shadow-lg: 0 12px 32px -4px rgba(0, 0, 0, 0.5);
+    --shadow-xl: 0 24px 48px -8px rgba(0, 0, 0, 0.55);
+  }
+}

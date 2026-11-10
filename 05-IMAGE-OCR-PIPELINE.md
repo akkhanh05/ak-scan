@@ -1,129 +1,70 @@
-# Pipeline xử lý ảnh và OCR
+# Pipeline ảnh, OCR và dựng lại tài liệu
 
-## 1. Mục tiêu
+## 1. Nguyên tắc
 
-Biến ảnh chụp/PDF thành trang scan thẳng, nền sạch, chữ rõ và giữ được bảng, vùng màu hoặc con dấu khi chế độ cho phép. Mọi thao tác diễn ra cục bộ trong trình duyệt.
+1. **Không làm mất hoặc tự sửa nội dung.** Không có luật sửa chữ theo từ điển/mẫu; chữ số không bao giờ bị xóa; dòng lặp chỉ bị gộp khi trùng cả nội dung lẫn vị trí. Chỗ chưa chắc chắn được đánh dấu để người dùng kiểm tra.
+2. **Dùng nguồn chính xác nhất có sẵn:** PDF có lớp chữ dùng chính lớp chữ đó (Word và PDF tìm kiếm), chỉ trang ảnh mới OCR.
+3. **Một ý nghĩa cho mỗi tùy chọn** (khổ giấy, lề, chất lượng) ở mọi định dạng xuất — xem `export-options.ts`.
 
-## 2. Pipeline render trang
+## 2. Render trang (`renderPage`, chạy trong Worker)
 
-`renderPage(page, maxEdge)` trong `lib/scan.ts` thực hiện:
+1. Giải mã ảnh (EXIF orientation) bằng `createImageBitmap`.
+2. Tỷ lệ nguồn tính theo **kích thước vùng được cắt**, không theo cả ảnh, nên tài liệu nhỏ trong ảnh lớn không mất chi tiết; có trần pixel theo RAM thiết bị.
+3. Nắn phối cảnh bằng lưới tam giác (homography của bốn góc).
+4. Chỉ với ảnh chụp: làm phẳng giấy cong (khi đường chữ cong đủ tin cậy) và tự cân thẳng. Trang PDF có lớp chữ bỏ qua hai bước này để lớp chữ khớp pixel.
+5. `fineRotation` (±3°) và xoay 90/180/270.
+6. Bộ lọc: `original`, `enhanced`, `grayscale`, `bw`. Bản đồ nền giấy dùng **làm mờ bằng JS** (3 lượt box blur) thay cho `ctx.filter`, vốn không chạy trên Safari < 18 và trong một số OffscreenCanvas.
 
-1. Decode Blob URL thành ảnh.
-2. Clamp và sắp thứ tự bốn góc.
-3. Perspective warp bằng lưới tam giác cục bộ.
-4. Nếu bật dewarp: đo độ lệch baseline theo các dải dọc, làm mượt đường cong và dịch dải về cùng đường cơ sở.
-5. Auto deskew từ gradient dòng chữ, cộng thêm `fineRotation` do người dùng chỉnh.
-6. Xoay 0/90/180/270 độ.
-7. Giới hạn kích thước đầu ra theo `maxEdge`.
-8. Chạy filter và trả Canvas.
+Preview chỉ render khi thao tác dừng ~140 ms và chỉ bản mới nhất được dựng (các yêu cầu cũ bị bỏ).
 
-## 3. Dò mép tài liệu
+`page-geometry.ts` áp đúng chuỗi biến đổi trên cho **điểm** (homography nghịch, xoay quanh tâm có hệ số fit) để đặt lớp chữ PDF lên ảnh đã cắt/xoay.
 
-`detectDocumentCorners` downscale ảnh, chuyển grayscale, tính gradient/edge và tìm các đường biên ứng viên. Giao điểm được chấm điểm theo diện tích, convexity, tỷ lệ và độ mạnh cạnh.
+## 3. Dò mép
 
-Kết quả gồm bốn tọa độ chuẩn hóa và confidence. UI chỉ tự áp dụng khi confidence từ 0,58; nếu thấp sẽ giữ góc hiện tại và yêu cầu người dùng kiểm tra tay.
+`detectDocumentCorners` (Worker) tìm cặp cạnh trái/phải, trên/dưới bằng biến đổi kiểu Hough trên gradient, chấm điểm theo vị trí, độ tương phản giấy/nền; giao điểm tạo bốn góc. Khi nhập ảnh, góc tự áp dụng nếu độ tin cậy ≥ 0,58; nếu không, trang được gắn cảnh báo “Kiểm tra 4 góc”. Khi chỉnh tay có kính lúp phóng 3× tại góc đang kéo; phím mũi tên dịch góc (Shift: nhanh).
 
-## 4. Cân thẳng và làm phẳng
+## 4. Mô hình OCR
 
-- Auto deskew lấy profile gradient ngang và tìm góc có score tốt nhất.
-- `fineRotation` cho phép chỉnh thêm từ −3° đến +3°.
-- Dewarp chia trang thành 16–28 vùng để ước lượng độ lệch dòng; output chia đến 120 dải dọc để hiệu chỉnh mượt.
-- Skew và curvature cache tối đa 40 entry để tránh tính lại liên tục.
+| Cấu hình | VI sạch | VI ảnh chụp | VI ảnh chụp xấu | EN sạch/ảnh chụp | EN ảnh chụp xấu |
+|---|---|---|---|---|---|
+| `eng+vie` (cũ) | 1,11% | 1,11% | 7,44% | 0,22% | 5,48% |
+| `Vietnamese+eng` — **đang dùng** | 0,16% | 0,16% | 3,96% | 0,22% | 6,14% |
 
-Dewarp phù hợp độ cong vừa và dạng hình trụ. Trang sách cong mạnh sát gáy vẫn có thể cần mô hình mesh 2D/deep learning trong tương lai.
+(CER — tỷ lệ ký tự sai; ảnh mẫu tổng hợp 300 dpi, “ảnh chụp” = thu 66%, xoay, mờ, nhiễu, JPEG 70; “xấu” = thu 45%, mờ mạnh, JPEG 55. Đánh đổi: tiếng Việt giảm lỗi khoảng một nửa, tiếng Anh trên ảnh rất xấu kém đi ~0,7 điểm.)
 
-## 5. Các chế độ filter
+- `tessdata_best` dạng float **không chạy** trong tesseract.js 7 (lõi WASM thiếu dot-product float), nên `best_int` là bản chính xác nhất dùng được.
+- Mô hình nằm trong `public/tessdata/*.traineddata.gz` (≈4,4 MB), checksum ghim trong `workflow/ocr-models.json`, khóa cache IndexedDB có phiên bản (`OCR_ASSET_VERSION`).
+- `npm run test:ocr-accuracy` đo lại CER/WER trên ảnh mẫu tổng hợp mỗi lần chạy test.
 
-- `original`: giữ nguyên màu và không áp dụng các slider làm sạch.
-- `enhanced`: chuẩn hóa bóng/nền cục bộ, tăng sáng và tương phản nhưng giữ màu quan trọng.
-- `grayscale`: bỏ màu sau bước loại bóng và cân nền.
-- `bw`: phân ngưỡng trắng/đen có bảo vệ vùng màu để hạn chế mất chữ trong ô màu.
+## 5. OCR một trang (`recognizePage`)
 
-Slider hiện tại: brightness, contrast, whiten, removeShadow và sharpen. Preset không-original bắt đầu ở 8/22/20/28/18 nhưng có thể chỉnh từng trang hoặc áp dụng settings cho mọi trang.
+1. Render bản xám (removeShadow ≥ 42, whiten ≥ 24) ở cạnh dài 3.200 px, đồng thời dò lưới bảng.
+2. Nhận diện với chế độ bố cục đã chọn: Tự động (PSM 3, nhận nhiều cột), Một cột (PSM 4), Rải rác (PSM 11).
+3. Nếu độ tin cậy < 96: thêm bản `enhanced` (và `bw` nếu < 91), và một lượt PSM 6.
+4. `selectBestOcrLines` chọn kết quả tốt nhất **theo từng dòng**, giữ thứ tự đọc của lượt đầu (không xen cột). Ghép dòng chỉ khi hai khung chồng nhau ≥ 60% chiều cao — tránh lỗi cũ làm dòng kế tiếp thay chỗ và mất một dòng ở mỗi đoạn tiếng Việt.
+5. Tối đa 10 dòng đáng ngờ được đọc lại riêng (PSM 7); kết quả chỉ được nhận khi độ dài tương đương dòng gốc.
+6. `cleanPositionedLine`: nối mảnh chữ (“s”+“ocial”), loại vệt nhỏ một chữ cái không phải từ thật; giữ từ một chữ cái tiếng Việt (à, á, ở, ý…), đơn vị sau số, và mọi chữ số.
 
-## 6. Làm sạch nền
+## 6. Dựng lại tài liệu
 
-Shadow removal dùng ảnh grayscale và background map cục bộ để giảm bóng không đều. Whiten đẩy vùng sáng về trắng; contrast và brightness được áp dụng sau normalization. Sharpen dùng kernel cục bộ với giá trị được clamp tự nhiên bởi `Uint8ClampedArray`.
+**Trang PDF có lớp chữ (`pdf-document.ts`):**
+- Bảng có viền dựng từ đường kẻ (hình chữ nhật mảnh hoặc nét vẽ) và cạnh ô tô màu; phát hiện ô gộp ngang/dọc; ô gộp chứa nhiều nhãn (“Lot 1 / Lot 2”) được tách tại ranh giới cột phù hợp; giữ màu nền ô, chữ trắng trên nền tối, căn giữa/phải.
+- Dòng thẳng hàng nhiều cột không viền (form “Nhãn: giá trị”, hàng chữ ký) thành bảng không viền.
+- Đoạn văn: nối dòng xuống dòng tự nhiên, tách khi dòng ngắn hoặc dòng mới bắt đầu bằng “Nhãn:”; heading theo cỡ chữ/đậm; danh sách thành numbering thật; khoảng trống lớn trong dòng thành tab.
+- Font gốc (Calibri, Times New Roman…), đậm/nghiêng lấy từ tên font nhúng; ảnh (logo) được cắt từ trang.
+- Vùng cắt của người dùng áp dụng cho Word: nội dung ngoài vùng cắt bị bỏ.
 
-## 7. Đánh giá chất lượng
+**Trang OCR (`ocr-structure.ts`):** đoạn theo phân đoạn của Tesseract + khoảng cách dọc; dòng ngắn kết thúc đoạn; mã có gạch nối giữ nguyên (“SS6960-” + “Phantom”); heading/tiêu đề theo chiều cao dòng; danh sách đánh số; bảng từ lưới đường kẻ dò được trong ảnh.
 
-`analyzeImageQuality` lấy mẫu ảnh nhỏ để đánh giá kích thước và sharpness. Cảnh báo được hiển thị ở thumbnail và bảng điều khiển. Quality warning không tự chặn export.
+**Word (`export/word.ts`):** mỗi trang nguồn là một section với khổ giấy/lề đã chọn (Như bản gốc = khổ PDF), ngôn ngữ soát chính tả `vi-VN`, heading dùng style Word thật, bảng có độ rộng cột theo nguồn (thu nhỏ khi vượt trang). “Gần bố cục gốc” thêm thụt lề/khoảng cách theo vị trí nguồn và ảnh nổi theo vị trí.
 
-## 8. OCR và searchable PDF
+## 7. Xuất PDF (`export/pdf.ts`)
 
-Tesseract.js tạo worker với hai ngôn ngữ `vie` và `eng`. Với searchable PDF:
+- pdf-lib cho cả PDF thường và PDF tìm kiếm; cùng quy tắc khổ giấy/lề (A4/Letter tự xoay ngang cho nội dung ngang; Vừa ảnh = cạnh dài A4).
+- Trang trắng đen lưu ảnh **1-bit** (DeviceGray, Flate), nhỏ hơn nhiều so với PNG/JPEG 8-bit.
+- Lớp chữ dùng chế độ render vô hình (Tr 3) và co giãn ngang (Tz) để vùng chọn khớp đúng chữ in; trang PDF có lớp chữ dùng chữ gốc ánh xạ qua cắt/xoay.
+- Metadata: tiêu đề theo tên file nguồn, `vi-VN`, Creator/Producer AK Scan.
 
-1. Render từng trang theo chất lượng xuất.
-2. Tesseract nhận dạng và sinh PDF có text layer.
-3. pdf-lib nạp PDF từng trang và ghép vào tài liệu cuối.
-4. Worker được terminate trong `finally`.
+## 8. Bước xem và sửa chữ
 
-Tiến độ OCR được ánh xạ vào progress tổng. Người dùng có thể yêu cầu hủy; việc hủy được kiểm tra giữa các trang.
-
-## 9. Xuất Word
-
-- Nếu PDF có embedded text hợp lệ, dùng text đó để giảm sai OCR.
-- Nếu không, OCR grayscale đã tăng removeShadow/whiten.
-- Nếu confidence dưới 94, chạy thêm enhanced pass và chọn kết quả confidence cao hơn.
-- Line confidence dưới 82 được tô vàng trong DOCX.
-- `detectTableGrid` tìm các đường ngang/dọc; word được đưa vào cell theo tâm bounding box.
-- Output ưu tiên đúng chữ và tái tạo bảng đơn giản, không cam kết pixel-perfect.
-
-Mọi text trước khi vào DOCX đều được loại null byte, control character và lone surrogate.
-
-## 10. Export PDF ảnh
-
-Hỗ trợ A4, Letter hoặc vừa ảnh; lề 0/8/15 mm; chất lượng compact/balanced/high. Trang trắng đen dùng PNG lossless, các filter khác dùng JPEG theo quality đã chọn.
-
-## 11. Hướng kiểm thử chất lượng
-
-Golden dataset nên bao gồm tài liệu Việt/Anh, bảng, con dấu, ô màu, nền tối, bóng, ảnh nghiêng, trang cong và PDF đã nén. Chỉ số cần theo dõi: corner confidence, skew residual, foreground loss, OCR confidence/CER và peak memory.
-
-## 12. Kế hoạch cải thiện độ chính xác OCR
-
-Mục tiêu là giảm cả hai nhóm lỗi: ký tự rác được chèn thêm và chữ thật bị bỏ sót. Không dùng confidence toàn trang làm tiêu chí duy nhất vì một trang có confidence cao vẫn có thể chứa nhiều ký tự đơn lẻ sai.
-
-### 12.1. Phân loại đầu vào trước OCR
-
-- PDF có text layer hợp lệ dùng text và tọa độ gốc từ PDF.js, không OCR lại toàn trang.
-- Trang scan được phân loại sơ bộ theo ngôn ngữ, số cột, mật độ chữ và loại nội dung trước khi chọn cấu hình OCR.
-- Trang tiếng Anh chỉ dùng `eng`; trang tiếng Việt hoặc song ngữ mới dùng `vie+eng` để tránh tăng tập ký tự không cần thiết.
-- Chọn page segmentation mode theo bố cục: văn bản một cột, nhiều cột, vùng chữ rời hoặc bảng không dùng chung một cấu hình cố định.
-
-### 12.2. Tiền xử lý thích nghi
-
-- Đo DPI/kích thước chữ ước lượng và upscale khi chữ quá nhỏ.
-- Deskew trước OCR; không chạy OCR trên trang còn nghiêng đáng kể.
-- Cắt viền và vùng nhiễu ngoài nội dung, nhưng giữ khoảng trắng an toàn quanh chữ.
-- Tạo tối đa hai biến thể grayscale/binary có tham số thích nghi theo độ tương phản, thay vì ép mọi trang qua cùng mức whiten/removeShadow.
-- Chỉ chạy biến thể thứ hai trên trang hoặc vùng có chất lượng thấp.
-
-### 12.3. Chọn kết quả theo vùng
-
-- So sánh OCR theo dòng hoặc block, không chọn nguyên một pass chỉ bằng confidence toàn trang.
-- Với vùng bất đồng, ưu tiên kết quả có confidence từ, tính hợp lệ ngôn ngữ, trật tự đọc và khoảng cách hình học tốt hơn.
-- OCR lại riêng các dòng có confidence thấp bằng crop độ phân giải cao và page segmentation phù hợp.
-- Không chạy pass hai cho các vùng đã có kết quả tốt để giảm thời gian và RAM.
-
-### 12.4. Lọc ký tự rác an toàn
-
-- Dựng dòng từ danh sách word/symbol có bounding box; không đưa nguyên `line.text` vào Word.
-- Loại token confidence rất thấp nếu token chỉ là một ký tự bất thường, nằm lệch baseline, quá nhỏ hoặc cách xa các từ còn lại.
-- Không xóa máy móc chữ số, dấu câu hoặc ký tự tiếng Việt hợp lệ. Token thấp confidence nhưng phù hợp ngữ cảnh được giữ và đánh dấu cần kiểm tra.
-- Chuẩn hóa khoảng trắng, dấu câu lặp, ký tự điều khiển và các chuỗi rác phổ biến sau OCR.
-- Giữ bản OCR thô nội bộ trong phiên để có thể đối chiếu khi bộ lọc loại nhầm.
-
-### 12.5. Quality gate trước khi tạo Word
-
-- Tính confidence theo block/dòng và tỷ lệ token bị lọc.
-- Cảnh báo nếu trang có quá nhiều token thấp confidence, dòng mất cân đối hoặc số ký tự thay đổi bất thường giữa hai pass.
-- Word mặc định chỉ chứa kết quả đã lọc; vùng chưa chắc chắn được tô vàng theo từng từ thay vì tô cả dòng.
-- Cho phép người dùng chọn ngôn ngữ `Tự động`, `Tiếng Việt`, `Tiếng Anh`, hoặc `Việt + Anh` khi tự động nhận sai.
-
-### 12.6. Thứ tự triển khai
-
-1. Dựng lại text từ word-level OCR và lọc token rác có bảo toàn dấu câu.
-2. Chọn ngôn ngữ và page segmentation mode thích nghi.
-3. OCR lại theo vùng confidence thấp thay vì chạy lại toàn trang.
-4. Bổ sung phân tích nhiều cột, nhiều bảng và thứ tự đọc.
-5. Đo CER/WER, thời gian và peak memory trên golden dataset trước khi bật mặc định.
+Khi có trang cần OCR và người dùng bật “Xem và sửa chữ trước khi tạo file”, mỗi dòng hiện cạnh ảnh cắt đúng dòng đó; dòng chưa chắc chắn tô vàng, có nút nhảy tới dòng cần kiểm tra tiếp theo. Bản sửa được dùng cho cả Word và lớp chữ PDF.

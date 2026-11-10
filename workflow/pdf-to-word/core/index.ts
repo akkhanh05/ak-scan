@@ -1,7 +1,11 @@
+import { hasTextLayer } from "@/workflow/shared/core/export-pipeline";
 import type { ScanPage } from "@/workflow/shared/core/scan";
 
-/** Domain contract for text-based PDF → editable Word. */
+/**
+ * Text-layer PDF → editable Word. Pages with a usable text layer are rebuilt
+ * from it (no OCR); every other page in the same export is recognised.
+ */
 export function pdfToWord(pages: ScanPage[]) {
-  return { kind: "pdf-to-word" as const, pages, requiresOcr: pages.some((page) => page.pdfKind === "scan" || !page.embeddedText) };
+  const textLayerPages = pages.filter(hasTextLayer);
+  return { kind: "pdf-to-word" as const, textLayerPages, ocrPages: pages.filter((page) => !hasTextLayer(page)) };
 }
-

@@ -70,7 +70,7 @@ export function HomeGuide() {
                 <h4>PDF tài liệu hoàn chỉnh</h4>
                 <p>PDF được xuất từ Word hoặc có lớp chữ rõ.</p>
                 <div className="workflow-route"><span>Đọc lớp chữ</span><ArrowRight /><span>Khôi phục đoạn</span><ArrowRight /><strong>Word chỉnh sửa</strong></div>
-                <small>Không OCR lại nếu lớp chữ dùng được, giúp giữ nội dung chính xác và dễ căn chỉnh trong Word.</small>
+                <small>Không OCR lại nếu lớp chữ dùng được. Bảng được dựng lại từ đường kẻ trong PDF (kể cả ô gộp, màu nền), font và chữ đậm giữ theo bản gốc.</small>
               </section>
             </div>
             <div className="workflow-decision-note">
@@ -126,7 +126,7 @@ export function HomeGuide() {
             <p className="overline">Riêng tư theo thiết kế</p>
             <h3>Tài liệu không được tải lên máy chủ</h3>
             <p>
-              Ảnh, PDF và nội dung nhận diện văn bản được xử lý trong bộ nhớ trình duyệt. AK Scan không có API upload hay kho lưu tài liệu.
+              Ảnh, PDF và nội dung nhận diện văn bản được xử lý trong bộ nhớ trình duyệt; bộ nhận diện chữ và mô hình tiếng Việt cũng được tải từ chính AK Scan, không qua dịch vụ bên thứ ba. AK Scan không có API upload hay kho lưu tài liệu.
             </p>
             <div className="privacy-flow">
               <span>File trên máy</span>
@@ -137,7 +137,7 @@ export function HomeGuide() {
             </div>
             <div className="notice-box">
               <strong>Khi dùng máy tính chung</strong>
-              <p>Hãy xóa phiên, đóng tab và bảo vệ file trong thư mục tải xuống sau khi hoàn tất.</p>
+              <p>Hãy xóa phiên, đóng tab và bảo vệ file trong thư mục tải xuống sau khi hoàn tất. Nếu đã bật <b>Lưu nháp trên máy</b>, hãy tắt nó để xóa bản nháp khỏi trình duyệt.</p>
             </div>
           </article>
 
@@ -164,7 +164,7 @@ export function HomeGuide() {
               </div>
             </div>
             <p>
-              Ảnh rung, chữ quá nhỏ, giấy nhàu mạnh, PDF đã nén nhiều lần và trang sách cong sát gáy có thể không phục hồi hoàn toàn. Ảnh phẳng và bốn góc được căn chính xác sẽ cho kết quả nhận diện tốt hơn; luôn đối chiếu Word với bản gốc.
+              Ảnh rung, chữ quá nhỏ, giấy nhàu mạnh, PDF đã nén nhiều lần và trang sách cong sát gáy có thể không phục hồi hoàn toàn. Ảnh phẳng và bốn góc được căn chính xác sẽ cho kết quả nhận diện tốt hơn. Bước <b>Xem và sửa chữ</b> đặt từng dòng cạnh ảnh gốc và tô vàng dòng chưa chắc chắn; hãy đối chiếu kỹ số tiền, mã số và tên riêng. Máy ít RAM tự dùng giới hạn thấp hơn để tránh treo tab.
             </p>
           </article>
 

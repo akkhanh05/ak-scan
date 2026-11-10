@@ -1,165 +1,143 @@
-import { chooseOcrCandidate, cleanOcrPageLines, deduplicateOcrLines, groupPdfTextItems, isSuspiciousOcrLine, joinWords, mergePositionedOcrLines, normalizeOcrText, postProcessOcrLine, recognizedTextLines, repairFragmentedOcrWords, scoreOcrCandidate, selectBestOcrLines, structureOcrDocumentLines } from "../shared/core/ocr";
+/** OCR post-processing and structure tests: content integrity comes first. */
+import {
+  cleanPositionedLine, deduplicatePositionedLines, isSuspiciousOcrLine, joinWords, normalizeOcrText, positionedLinesFromResult,
+  postProcessOcrLine, recognizedTextLines, repairFragmentedOcrWords, scoreOcrCandidate, selectBestOcrLines,
+} from "../shared/core/ocr";
+import type { PositionedOcrLine } from "../shared/core/ocr";
+import { layoutOcrPage } from "../shared/core/ocr-structure";
+import type { ParagraphBlock, TableBlock } from "../shared/core/document-model";
+import { plainText } from "../shared/core/document-model";
 
 let failed = 0;
 function test(name: string, fn: () => void) { try { fn(); console.log(`  [PASS] ${name}`); } catch (error) { failed++; console.error(`  [FAIL] ${name}: ${(error as Error).message}`); } }
-function expect(actual: unknown, expected: unknown, message: string) { if (actual !== expected) throw new Error(`${message}; expected ${String(expected)}, got ${String(actual)}`); }
-const word = (text: string, confidence: number, x: number, h = 20) => ({ text, confidence, bbox: { x0: x, y0: 100, x1: x + Math.max(8, text.length * 10), y1: 100 + h } });
+function expect(actual: unknown, expected: unknown, message: string) { if (actual !== expected) throw new Error(`${message}; expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`); }
+const word = (text: string, confidence: number, x: number, h = 20, y = 100) => ({ text, confidence, bbox: { x0: x, y0: y, x1: x + Math.max(8, text.length * 10), y1: y + h } });
+const line = (text: string, y: number, x0 = 10, x1 = 400, confidence = 95, paragraphKey?: string): PositionedOcrLine => ({ text, confidence, bbox: { x0, y0: y, x1, y1: y + 20 }, words: [], paragraphKey });
 
-console.log("OCR POST-PROCESSING TESTS");
-test("removes tiny inserted OCR glyphs but keeps the sentence", () => {
-  const result = postProcessOcrLine({ words: [word("Today", 96, 0), word("we're", 96, 65), word("g", 28, 125, 7), word("going", 96, 140), word("home", 96, 205)] });
-  expect(result.text, "Today we're going home", "noise glyph should be removed");
-  expect(result.metrics.filteredNoiseCount, 1, "filtered count");
+console.log("OCR INTEGRITY TESTS");
+
+test("a repeated line at a different position is kept (e.g. two equal totals)", () => {
+  const lines = deduplicatePositionedLines([line("Tổng cộng: 100.000", 100), line("Tổng cộng: 100.000", 140)]);
+  expect(lines.length, 2, "both totals must survive");
 });
-test("removes full-height very-low-confidence glyphs inserted inside prose", () => {
-  const result = postProcessOcrLine({ words: [word("staying", 96, 0), word("up", 96, 78), word("1", 18, 110), word("late", 96, 125)] });
-  expect(result.text, "staying up late", "full-height isolated artifact should be removed");
+test("the same line read twice at the same position collapses to one", () => {
+  expect(deduplicatePositionedLines([line("Tổng cộng: 100.000", 100), line("Tổng cộng: 100.000", 102)]).length, 1, "duplicate pass must collapse");
 });
-test("keeps legitimate one-letter English words", () => {
-  const result = postProcessOcrLine({ words: [word("It", 96, 0), word("is", 96, 25), word("a", 18, 50), word("test", 96, 65)] });
-  expect(result.text, "It is a test", "the article a must not be removed");
+test("multi-pass selection keeps legitimately repeated rows", () => {
+  const passA = [line("Tổng cộng: 100.000", 100, 10, 400, 93), line("Tổng cộng: 100.000", 140, 10, 400, 93)];
+  const passB = [line("Tổng cộng: 100.000", 101, 10, 400, 95), line("Tổng cộng: 100.000", 141, 10, 400, 95)];
+  expect(selectBestOcrLines([passA, passB]).length, 2, "two rows in, two rows out");
 });
-test("keeps legitimate numeric tokens and punctuation", () => {
-  const result = postProcessOcrLine({ words: [word("If", 96, 0), word("you", 96, 30), word("sleep", 96, 70), word("at", 96, 130), word("11", 96, 160), word("p.m.", 96, 190), word(",", 40, 230, 6)] });
-  expect(result.text, "If you sleep at 11 p.m.,", "time and comma must stay intact");
+test("tall Vietnamese line boxes never let the next line replace this one", () => {
+  // Line pitch 33 px, boxes 32 px tall (diacritics): neighbours almost touch.
+  const tall = (text: string, y: number, confidence: number): PositionedOcrLine => ({ text, confidence, bbox: { x0: 10, y0: y, x1: 900, y1: y + 32 }, words: [] });
+  const passA = [tall("Hôm nay, ngày 10 tháng 11 năm 2026, chúng tôi gồm", 100, 90), tall("có đại diện bên giao và bên nhận.", 133, 90)];
+  const passB = [tall("Hôm nay, ngày 10 tháng 11 năm 2026, chúng tôi gồm", 101, 91), tall("có đại diện bên giao và bên nhận.", 134, 99)];
+  const result = selectBestOcrLines([passA, passB]);
+  expect(result.map((item) => item.text).join(" | "), "Hôm nay, ngày 10 tháng 11 năm 2026, chúng tôi gồm | có đại diện bên giao và bên nhận.", "both lines, in order");
 });
-test("keeps Vietnamese diacritics and normalizes Unicode", () => {
-  const result = postProcessOcrLine({ words: [word("Tiếng", 95, 0), word("Việt", 94, 65), word("rất", 95, 115), word("rõ", 96, 150)] });
-  expect(result.text, "Tiếng Việt rất rõ", "Vietnamese NFC text should remain readable");
+test("text is never rewritten by dictionary or sample-specific rules", () => {
+  for (const sample of ["Chapter i Soon after", "the wor' is", "ocial", "phon!e", "cortiso", "ButIn"]) expect(normalizeOcrText(sample), sample, "word substitution");
 });
-test("retains but flags a low-confidence real word for review", () => {
-  const result = postProcessOcrLine({ words: [word("The", 96, 0), word("hidden", 42, 40), word("danger", 96, 110)] });
-  expect(result.text, "The hidden danger", "low-confidence word must not be deleted");
-  expect(result.words[1].flagged, true, "word should be flagged");
-  expect(result.retryRegions.length, 1, "low-confidence word needs a retry region");
-});
-test("does not delete an isolated heading/list digit", () => {
-  const result = postProcessOcrLine({ words: [word("4", 43, 0, 8), word("First", 96, 25), word("sleep", 96, 85)] });
-  expect(result.text, "4 First sleep", "list digit at a line edge is meaningful");
-});
-test("repairs spaces around punctuation", () => {
+test("normalisation only fixes whitespace and punctuation spacing", () => {
   expect(normalizeOcrText("Hello  ,  world !"), "Hello, world!", "punctuation spacing");
-  expect(joinWords([{ normalizedText: "Hello" }, { normalizedText: "," }, { normalizedText: "world" }, { normalizedText: "!" }]), "Hello, world!", "word joining");
+  expect(joinWords([{ normalizedText: "Hello" }, { normalizedText: "," }, { normalizedText: "world" }]), "Hello, world", "word joining");
+  expect(normalizeOcrText("  Tiếng\tViệt  "), "Tiếng Việt", "Vietnamese marks kept");
 });
-test("groups positioned PDF text into lines and detects a larger heading", () => {
-  const lines = groupPdfTextItems([
-    { text: "TITLE", x: 10, y: 100, width: 50, height: 18, fontName: "F1", hasEol: true },
-    { text: "Hello", x: 10, y: 70, width: 30, height: 10, fontName: "F2", hasEol: false },
-    { text: "world.", x: 44, y: 70, width: 32, height: 10, fontName: "F2", hasEol: true },
-  ]);
-  expect(lines.length, 2, "line count");
-  expect(lines[0].heading, true, "large text should be a heading");
-  expect(lines[1].text, "Hello world.", "positioned words should keep spacing");
+test("Vietnamese one-letter words are not scored as noise", () => {
+  const withSingles = scoreOcrCandidate("Tôi ở nhà và có ý kiến rằng á", 90);
+  const withoutSingles = scoreOcrCandidate("Tôi đang nhà và có kiến rằng nhé", 90);
+  expect(Math.abs(withSingles - withoutSingles) < .1, true, `scores ${withSingles} vs ${withoutSingles}`);
+});
+test("symbol specks still lower a candidate's score", () => {
+  expect(scoreOcrCandidate("Sổ tay hướng dẫn | © sử dụng", 90) < scoreOcrCandidate("Sổ tay hướng dẫn sử dụng", 90), true, "noise penalty");
+});
+test("digits are never deleted: a low-confidence digit is flagged for review", () => {
+  const result = postProcessOcrLine({ words: [word("staying", 96, 0), word("up", 96, 78), word("1", 18, 110), word("late", 96, 125)] });
+  expect(result.text, "staying up 1 late", "digit kept");
+  expect(result.words[2].flagged, true, "digit flagged");
+});
+test("a tiny low-confidence stray letter between words is removed", () => {
+  const result = postProcessOcrLine({ words: [word("Today", 96, 0), word("we're", 96, 65), word("g", 28, 125, 7), word("going", 96, 140)] });
+  expect(result.text, "Today we're going", "speck removed");
+});
+test("real one-letter words survive even with low confidence", () => {
+  expect(postProcessOcrLine({ words: [word("It", 96, 0), word("is", 96, 25), word("a", 18, 50, 8), word("test", 96, 65)] }).text, "It is a test", "English a");
+  expect(postProcessOcrLine({ words: [word("Tôi", 96, 0), word("ở", 20, 40, 8), word("nhà", 96, 60)] }).text, "Tôi ở nhà", "Vietnamese ở");
+});
+test("fragment repair joins s+ocial but never a Vietnamese one-letter word", () => {
+  expect(repairFragmentedOcrWords([word("s", 90, 0, 10), word("ocial", 90, 12, 10), word("media", 90, 70, 10)]).map((item) => item.text).join(" "), "social media", "split word");
+  expect(repairFragmentedOcrWords([word("ở", 90, 0, 10), word("nhà", 90, 12, 10)]).map((item) => item.text).join(" "), "ở nhà", "ở stays separate");
+});
+test("numbers alone are not treated as suspicious when confidence is high", () => {
+  expect(isSuspiciousOcrLine("3 436,0 10 1.543 7 1.052", 95), false, "numeric row");
+  expect(isSuspiciousOcrLine("Hợp | đồng", 95), true, "pipe noise");
+});
+test("multi-column anchor order is kept (columns are not interleaved)", () => {
+  const left1 = line("Left one", 10, 10, 130, 90), left2 = line("Left two", 40, 10, 130, 90);
+  const right1 = line("Right one", 10, 300, 440, 95), right2 = line("Right two", 40, 300, 440, 95);
+  const result = selectBestOcrLines([[left1, left2, right1, right2]]);
+  expect(result.map((item) => item.text).join(" | "), "Left one | Left two | Right one | Right two", "reading order");
+});
+test("a faint row found only by another pass is inserted after its neighbour", () => {
+  const heading = line("Exam instructions", 10, 20, 210, 93);
+  const faint = line("Read every question carefully.", 44, 24, 310, 75);
+  const result = selectBestOcrLines([[heading], [heading, faint]]);
+  expect(result.map((item) => item.text).join(" | "), "Exam instructions | Read every question carefully.", "residual kept");
+});
+test("content-first fallback keeps single-digit lines", () => {
+  expect(recognizedTextLines("Trang\n5\n|\nKết thúc").join(" | "), "Trang | 5 | Kết thúc", "digits are content");
+});
+test("cleanPositionedLine counts uncertain words for the review step", () => {
+  const cleaned = cleanPositionedLine({ text: "Số tiền 1.250.000", confidence: 80, bbox: { x0: 0, y0: 0, x1: 300, y1: 20 }, words: [word("Số", 95, 0, 20, 0), word("tiền", 95, 40, 20, 0), word("1.250.000", 60, 100, 20, 0)] });
+  expect(cleaned.text, "Số tiền 1.250.000", "text intact");
+  expect(cleaned.flaggedWords, 1, "one uncertain word");
+});
+test("positioned lines remember their Tesseract paragraph", () => {
+  const data = { blocks: [{ paragraphs: [
+    { lines: [{ text: "A b", confidence: 90, bbox: { x0: 0, y0: 0, x1: 10, y1: 10 } }] },
+    { lines: [{ text: "C d", confidence: 90, bbox: { x0: 0, y0: 20, x1: 10, y1: 30 } }] },
+  ] }] };
+  const lines = positionedLinesFromResult(data, "p");
+  expect(lines[0].paragraphKey === lines[1].paragraphKey, false, "different paragraphs");
 });
 
-test("auto language keeps English source instead of Vietnamese-looking substitutions", () => {
-  const english = { language: "eng" as const, text: "THE HIDDEN DANGERS OF STAYING UP LATE", confidence: 91 };
-  const vietnamese = { language: "vie" as const, text: "CÁC ẨN NGUY HIỂM CỦ Ở LẠI LÊN MUỘN", confidence: 93 };
-  expect(chooseOcrCandidate(english, vietnamese), english, "English source must remain English");
+console.log("\nOCR → DOCUMENT STRUCTURE");
+const page = { width: 1000, height: 1400 };
+test("paragraph breaks follow Tesseract paragraphs and vertical gaps", () => {
+  const content = layoutOcrPage([
+    line("Đoạn một dòng thứ nhất rất dài và chạm lề phải của cột", 100, 50, 950, 95, "p:0:0"),
+    line("đoạn một dòng thứ hai.", 125, 50, 500, 95, "p:0:0"),
+    line("Đoạn hai bắt đầu sau một khoảng trắng lớn và chạm lề phải", 200, 50, 950, 95, "p:0:1"),
+    line("đoạn hai kết thúc.", 225, 50, 420, 95, "p:0:1"),
+  ], page, { scale: .6 });
+  const paragraphs = content.blocks.filter((block) => block.kind === "paragraph") as ParagraphBlock[];
+  expect(paragraphs.length, 2, "two paragraphs");
+  expect(plainText(paragraphs[0].runs), "Đoạn một dòng thứ nhất rất dài và chạm lề phải của cột đoạn một dòng thứ hai.", "wrapped lines joined");
+});
+test("hyphenated codes split across lines stay intact", () => {
+  const content = layoutOcrPage([line("Mã hàng SS6960-", 100, 50, 950, 95, "k"), line("Phantom", 125, 50, 300, 95, "k")], page, { scale: .6 });
+  expect(plainText((content.blocks[0] as ParagraphBlock).runs), "Mã hàng SS6960-Phantom", "no space after hyphen");
+});
+test("numbered lines become list items and taller lines become headings", () => {
+  const content = layoutOcrPage([
+    { ...line("ĐIỀU KHOẢN CHUNG", 60, 300, 700), bbox: { x0: 300, y0: 60, x1: 700, y1: 100 } },
+    line("1. Bên A giao hàng đúng hạn.", 150, 50, 600, 95, "a"),
+    line("2. Bên B thanh toán đủ.", 180, 50, 560, 95, "b"),
+  ], page, { scale: .6 });
+  expect(content.blocks[0].kind, "title", "first tall line is the title");
+  const items = content.blocks.filter((block) => block.kind === "list-item") as ParagraphBlock[];
+  expect(items.length, 2, "two list items");
+  expect(items[0].listType, "ordered", "numbered list");
+  expect(plainText(items[0].runs), "Bên A giao hàng đúng hạn.", "marker removed from text, kept as numbering");
+});
+test("a detected grid becomes a table with words in their cells", () => {
+  const cell = (text: string, x: number, y: number): PositionedOcrLine => ({ text, confidence: 95, bbox: { x0: x, y0: y, x1: x + 60, y1: y + 20 }, words: [{ text, confidence: 95, bbox: { x0: x, y0: y, x1: x + 60, y1: y + 20 } }] });
+  const content = layoutOcrPage([line("Bảng kê", 20, 50, 300), cell("STT", 110, 110), cell("Số lượng", 310, 110), cell("1", 110, 160), cell("164", 310, 160)], page, { scale: .6, grid: { xLines: [100, 300, 500], yLines: [100, 150, 200] } });
+  const table = content.blocks.find((block) => block.kind === "table") as TableBlock;
+  expect(Boolean(table), true, "table present");
+  expect(table.rows.map((row) => row.map((item) => plainText(item.runs)).join("|")).join(" / "), "STT|Số lượng / 1|164", "cells");
 });
 
-test("auto language keeps real Vietnamese when its recognition is clearly better", () => {
-  const english = { language: "eng" as const, text: "Tai lieu huong dan su dung", confidence: 72 };
-  const vietnamese = { language: "vie" as const, text: "Tài liệu hướng dẫn sử dụng", confidence: 94 };
-  expect(chooseOcrCandidate(english, vietnamese), vietnamese, "Vietnamese source must retain diacritics");
-});
-test("auto language keeps Vietnamese marks even with a small confidence gap", () => {
-  const english = { language: "eng" as const, text: "Tai lieu huong dan su dung", confidence: 91 };
-  const vietnamese = { language: "vie" as const, text: "Tài liệu hướng dẫn sử dụng", confidence: 93 };
-  expect(chooseOcrCandidate(english, vietnamese), vietnamese, "matching source glyphs should keep Vietnamese marks");
-});
-test("line merging cannot cascade until it swallows the rest of a page", () => {
-  const line = (text: string, y0: number, y1: number) => ({ text, confidence: 95, bbox: { x0: 10, y0, x1: 100, y1 }, words: [word(text, 95, 10, y1 - y0)] });
-  const result = mergePositionedOcrLines([line("first", 10, 20), line("fragment", 13, 23), line("second", 27, 37), line("third", 44, 54)]);
-  expect(result.length, 3, "nearby fragments merge, separate baselines remain separate");
-  expect(result[0].text, "first fragment", "same-line fragments merge once");
-});
-test("repairs a one-letter OCR fragment without joining normal words", () => {
-  const repaired = repairFragmentedOcrWords([word("s", 90, 0, 10), word("ocial", 90, 12, 10), word("media", 90, 52, 10)]);
-  expect(repaired.map((item) => item.text).join(" "), "social media", "only the split word should be rejoined");
-});
-test("repairs real scan fragments from the English sleep article", () => {
-  const repaired = repairFragmentedOcrWords([
-    { text: "s", confidence: 42, bbox: { x0: 100, y0: 100, x1: 108, y1: 120 } },
-    { text: "ocial", confidence: 94, bbox: { x0: 110, y0: 100, x1: 160, y1: 120 } },
-    { text: "media", confidence: 96, bbox: { x0: 175, y0: 100, x1: 220, y1: 120 } },
-  ]);
-  expect(repaired.map((word) => word.text).join(" "), "social media", "scan fragment s+ocial should be repaired");
-});
-test("repairs known high-confidence English scan substitutions", () => {
-  expect(normalizeOcrText("ocial media. ButIn modern life. i Soon wor’ phon!e cortiso"), "social media. But In modern life. Soon work phone cortisol", "known scan substitutions should be normalized");
-});
-test("candidate scoring rejects visible OCR garbage despite similar confidence", () => {
-  const clean = scoreOcrCandidate("Sooner or later, your body will pay a high price.", 91);
-  const noisy = scoreOcrCandidate(": © P 8 er or later, i Soon your body will pay.", 92);
-  expect(clean > noisy, true, "clean prose should beat a noisy higher-confidence candidate");
-});
-test("candidate scoring rejects long words fused by small italic OCR", () => {
-  const fused = "upstoremustoperate fortwoconsecutiveweeks Setupandoperationalcosts";
-  const clean = "up store must operate for two consecutive weeks. Setup and operational costs";
-  expect(scoreOcrCandidate(clean, 82) > scoreOcrCandidate(fused, 88), true, "clean spaced italic line should beat a higher-confidence fused line");
-});
-test("selects the cleanest OCR result independently for each visual line", () => {
-  const bbox = { x0: 10, y0: 10, x1: 200, y1: 30 };
-  const noisy = { text: "In modern life, it’s very casy to scroll pu", confidence: 91, bbox, words: [] };
-  const clean = { text: "In modern life, it’s very easy to scroll", confidence: 90, bbox, words: [] };
-  expect(selectBestOcrLines([[noisy], [clean]])[0].text, clean.text, "line consensus should prefer clean prose");
-  expect(isSuspiciousOcrLine(noisy.text, noisy.confidence), true, "known malformed line should be retried");
-});
-test("does not swap simultaneous multi-column OCR rows", () => {
-  const left = { text: "Left column text", confidence: 86, bbox: { x0: 10, y0: 40, x1: 130, y1: 60 }, words: [] };
-  const right = { text: "Right column text", confidence: 98, bbox: { x0: 300, y0: 40, x1: 440, y1: 60 }, words: [] };
-  const alternateLeft = { ...left, text: "Clean left column text", confidence: 90 };
-  const result = selectBestOcrLines([[left, right], [alternateLeft]]);
-  expect(result.map((line) => line.text).join(" | "), "Clean left column text | Right column text", "candidate must only replace its matching horizontal region");
-});
-test("keeps a faint line discovered only by an alternate segmentation", () => {
-  const heading = { text: "Exam instructions", confidence: 93, bbox: { x0: 20, y0: 10, x1: 210, y1: 32 }, words: [] };
-  const faintItalic = { text: "Read every question carefully.", confidence: 75, bbox: { x0: 24, y0: 44, x1: 310, y1: 62 }, words: [] };
-  const result = selectBestOcrLines([[heading], [heading, faintItalic]]);
-  expect(result.map((line) => line.text).join(" | "), "Exam instructions | Read every question carefully.", "alternate-only line must not be dropped");
-});
-test("does not emit repeated OCR lines into searchable PDF or Word", () => {
-  const line = "science shows that when you sacrifice your sleep, you create a dangerous debt. Sooner or later,";
-  expect(deduplicateOcrLines([line, line, line]).join("\n"), line, "consecutive OCR duplicates must collapse to one line");
-});
-test("repairs the exact curved-page reading-order regression", () => {
-  const cleaned = cleanOcrPageLines([
-    "social media or working until midnight. ButIn modern life, it’s very easy to keep scrolling on s",
-    ": © P 8 er or later,",
-    "science shows that when you sacrifice your sleep, you create a dangerous debt. So",
-    "Soon",
-    "your body will have to pay a very high price.",
-  ]);
-  expect(cleaned.join("\n"), "In modern life, it’s very easy to keep scrolling on social media or working until midnight. But\nscience shows that when you sacrifice your sleep, you create a dangerous debt. Sooner or later,\nyour body will have to pay a very high price.", "curved scan should restore sentence and remove garbage lines");
-});
-test("filters a noise glyph after a fragmented word has been repaired", () => {
-  const repaired = repairFragmentedOcrWords([
-    word("s", 42, 0, 10), word("ocial", 94, 12, 10), word("g", 24, 67, 6), word("media", 96, 80, 10),
-  ]);
-  const cleaned = postProcessOcrLine({ words: repaired });
-  expect(cleaned.text, "social media", "repair must not bypass filtering of an inserted OCR glyph");
-});
-test("content-first lines preserve OCR reading order without geometry", () => {
-  const lines = recognizedTextLines("Hello everyone\nToday we're going to talk\n\nGoodbye!");
-  expect(lines.join(" | "), "Hello everyone | Today we're going to talk | Goodbye!", "raw OCR line order must be authoritative");
-});
-test("structures OCR Word output instead of flattening the whole page", () => {
-  const blocks = structureOcrDocumentLines([
-    "PMG201c - Practical Exam 1 (Fall 2025)",
-    "You have created a unique niche consumer product,",
-    "and your task is to demonstrate its market viability.",
-    "Request 1 (20%): write a narrative charter statement",
-    "1. Project name,",
-    "2. Justifications and constraints.",
-    "Request 2 (20%): list five cost items.",
-  ]);
-  expect(blocks.length, 6, "logical paragraph count");
-  expect(blocks[0].kind, "title", "first short line becomes title");
-  expect(blocks[1].text, "You have created a unique niche consumer product, and your task is to demonstrate its market viability.", "wrapped prose lines merge");
-  expect(blocks[2].kind, "heading", "request becomes heading");
-  expect(blocks[3].kind, "list-item", "numbered item remains separate");
-});
-if (failed) process.exit(1);
-
-
+if (failed) { console.error(`\n${failed} OCR test(s) failed`); process.exit(1); }
+console.log("\nPASS: OCR tests");

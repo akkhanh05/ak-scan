@@ -1,0 +1,20 @@
+{
+  "version": "2026-11-best-int-1",
+  "license": "Apache-2.0 (Tesseract OCR language data)",
+  "models": [
+    {
+      "file": "public/tessdata/Vietnamese.traineddata.gz",
+      "sha256": "f24a2d9dc430ac2f5bb47d8bbf3f53d04a8bc7ef243066aeea15f55e821ce50d",
+      "uncompressedSha256": "d1158960619cc825ed9924175926cbe1f001160ed01815770ea89c76dff80a55",
+      "source": "https://github.com/tesseract-ocr/tessdata/blob/main/script/Vietnamese.traineddata",
+      "note": "Vietnamese script model, LSTM int8 (best_int)"
+    },
+    {
+      "file": "public/tessdata/eng.traineddata.gz",
+      "sha256": "45b4cb346724ac1774f1c36f42f182b887bcdb28ebe63e6fff90ac41f3fcff91",
+      "uncompressedSha256": "5dc5d8d640a212c9d6184921ba103b186f50e0fed9ee716c53e6b312b400d747",
+      "source": "https://www.npmjs.com/package/@tesseract.js-data/eng (1.0.0, 4.0.0_best_int)",
+      "note": "English, tessdata_best converted to int8 (best_int)"
+    }
+  ]
+}

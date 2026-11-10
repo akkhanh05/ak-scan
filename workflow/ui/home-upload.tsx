@@ -45,7 +45,7 @@ export function HomeUpload({ dragging, importing, fileRef, pdfRef, cameraRef, on
           <div className="format-floating-tag top-right">.PNG</div>
           <div className="upload-icon-box"><Upload size={32} /></div>
           <h2>Kéo thả ảnh hoặc PDF vào đây</h2>
-          <p>Hoặc chọn file từ thiết bị. Hỗ trợ <b>JPG, PNG, WebP, PDF</b>. Tối đa 15MB/ảnh.</p>
+          <p>Hoặc chọn file từ thiết bị. Hỗ trợ <b>JPG, PNG, WebP, PDF</b>. Tối đa 15 MB/ảnh, 40 MB/PDF, 20 trang mỗi phiên.</p>
 
           <div className="upload-actions-grid">
             <button className="button primary" disabled={importing} onClick={() => fileRef.current?.click()}><Upload size={18} /><span>Chọn File Ảnh</span></button>
@@ -54,7 +54,7 @@ export function HomeUpload({ dragging, importing, fileRef, pdfRef, cameraRef, on
           </div>
 
           <input ref={fileRef} className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => resetAndAdd(event.currentTarget)} />
-          <input ref={pdfRef} className="sr-only" type="file" accept="application/pdf,.pdf" onChange={(event) => resetAndAdd(event.currentTarget)} />
+          <input ref={pdfRef} className="sr-only" type="file" accept="application/pdf,.pdf" multiple onChange={(event) => resetAndAdd(event.currentTarget)} />
           <input ref={cameraRef} className="sr-only" type="file" accept="image/*" capture="environment" onChange={(event) => resetAndAdd(event.currentTarget)} />
         </section>
 
