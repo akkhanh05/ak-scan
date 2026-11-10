@@ -2,71 +2,45 @@
 
 > Quét ảnh tài liệu, tạo PDF scan và chuyển PDF tài liệu sang Word ngay trên thiết bị.
 
-AK Scan là ứng dụng client-only: ảnh, PDF và nội dung OCR được xử lý trong trình duyệt, không có API upload và không lưu tài liệu lên máy chủ.
+AK Scan là ứng dụng client-only: ảnh, PDF và nội dung OCR được xử lý trong trình duyệt, không có API upload và không lưu tài liệu lên máy chủ. Bộ nhận diện chữ và mô hình tiếng Việt cũng được phục vụ từ chính trang web, không qua dịch vụ bên thứ ba.
 
 ## Ba workflow
 
-1. **Ảnh chụp tài liệu → PDF scan**: tự dò bốn góc, nắn phối cảnh, làm sạch nền, khử bóng và tăng nét.
-2. **PDF chứa ảnh scan → PDF scan**: tách từng trang rồi chạy cùng pipeline xử lý như ảnh chụp.
-3. **PDF tài liệu có lớp chữ → Word chỉnh sửa**: đọc trực tiếp lớp chữ, khôi phục đoạn, heading, danh sách và bảng; không OCR lại khi lớp chữ dùng được.
+1. **Ảnh chụp tài liệu → PDF scan / PDF tìm kiếm / Word**: tự dò mép ngay khi nhập, nắn phối cảnh, làm phẳng giấy cong, làm sạch nền, khử bóng và tăng nét; nhận diện chữ Việt + Anh.
+2. **PDF chứa ảnh scan → PDF scan / Word**: tách từng trang rồi chạy cùng pipeline như ảnh chụp (trang là một ảnh lớn kèm lớp OCR cũ cũng được nhận diện lại bằng mô hình tiếng Việt).
+3. **PDF tài liệu có lớp chữ → Word chỉnh sửa**: dựng lại trực tiếp từ lớp chữ — bảng từ đường kẻ (kể cả ô gộp, màu nền), font gốc, chữ đậm, đoạn, heading, danh sách, ảnh — không OCR lại.
 
 ## Tính năng
 
-- Hỗ trợ JPG, PNG, WebP, PDF và camera trên thiết bị tương thích.
-- Căn chỉnh tự động hoặc chỉnh tay bốn góc; hỗ trợ làm phẳng giấy cong.
-- Bộ lọc màu gốc, tăng cường, xám và trắng đen; chỉnh sáng, tương phản, trắng nền, khử bóng và sắc nét.
-- OCR tiếng Việt và tiếng Anh (`eng+vie`) với nhiều lượt đối chiếu để ưu tiên độ chính xác.
-- Xuất PDF scan, PDF có thể tìm kiếm và DOCX chỉnh sửa.
-- Giữ bố cục PDF có lớp chữ: đoạn văn, heading, danh sách, bảng và căn đều hai lề.
-- Mục lục cố định, giao diện responsive, hỗ trợ thu phóng Firefox bằng `transform: scale()`.
-- Favicon, Apple Touch Icon, Web App Manifest, Open Graph/Twitter Card và `robots.txt`.
+- JPG, PNG, WebP, PDF (nhiều file một lần) và camera trên thiết bị tương thích.
+- Tự dò mép khi nhập ảnh; chỉnh tay bốn góc có kính lúp, phím mũi tên; hoàn tác/làm lại (Ctrl+Z / Ctrl+Shift+Z).
+- Bộ lọc màu gốc, tăng cường, xám, trắng đen; chỉnh sáng, tương phản, trắng nền, khử bóng, sắc nét. Xử lý ảnh chạy trong Web Worker nên giao diện không bị đứng.
+- OCR tiếng Việt + Anh bằng mô hình `Vietnamese` + `eng` (best_int) đóng gói sẵn; so sánh nhiều lượt theo từng dòng; **bước xem và sửa chữ** đặt mỗi dòng cạnh ảnh gốc, tô vàng dòng chưa chắc chắn.
+- Nguyên tắc toàn vẹn: không tự sửa từ, không xóa chữ số, không gộp dòng lặp hợp lệ (ví dụ hai dòng “Tổng cộng” giống nhau).
+- Xuất PDF scan (trang trắng đen lưu ảnh 1-bit rất nhẹ), PDF có thể tìm kiếm (lớp chữ vô hình đúng vị trí) và Word (`vi-VN`, heading/danh sách/bảng thật). Khổ giấy, lề, chất lượng có cùng ý nghĩa ở mọi định dạng.
+- PDF dài hơn số chỗ còn lại: chọn khoảng trang cần nhập.
+- Tên file xuất theo tên file nguồn; nút chia sẻ (Web Share) trên điện thoại.
+- Lưu nháp trên máy (tùy chọn, IndexedDB), PWA cài được và dùng offline sau lần mở đầu, dark mode theo hệ thống.
 
 ## Riêng tư và bảo mật
 
-- **Xử lý cục bộ:** không có backend, API upload, database, tài khoản, cookie đăng nhập hoặc kho lưu tài liệu. Ảnh, PDF và OCR chỉ nằm trong bộ nhớ phiên trình duyệt.
-- **Không tin tên file:** hệ thống đọc magic bytes và kiểm tra thêm cấu trúc PNG `IHDR`, WebP `RIFF/WEBP` và PDF header có phiên bản; file rỗng, giả extension hoặc không giải mã được bị từ chối.
-- **Chống giả mạo tên file:** loại control character, ký tự Unicode Bidi/formatting ẩn, chuẩn hóa Unicode NFC và giới hạn tên hiển thị 160 ký tự.
-- **Giới hạn tài nguyên:** tối đa 15 MB/ảnh, 24 MP/ảnh, 40 MB/PDF, 20 trang và 160 triệu decoded pixel mỗi phiên; thao tác đọc/render có timeout và dọn Blob URL khi lỗi hoặc xóa phiên.
-- **Đầu ra an toàn:** text OCR/PDF được loại null byte, XML-invalid control character và lone surrogate trước khi tạo PDF/DOCX; tên file tải xuống do ứng dụng sinh, không dùng đường dẫn từ input.
-- **Tài nguyên nội bộ:** Tesseract worker, PDF worker, WASM, font và dữ liệu ngôn ngữ được phục vụ cùng origin; bundle production có SRI SHA-384.
-- **CSP và HTTPS:** production dùng HTTPS/HSTS; CSP giới hạn script, style, ảnh, font, worker, kết nối, object và form action. CSP vẫn cần `unsafe-inline`/`wasm-unsafe-eval` để Next.js static export và OCR/WASM hoạt động.
-- **Không lưu secret phía client:** mã ứng dụng không dùng `localStorage`, `sessionStorage` hay token/API key; kiểm tra source hiện không phát hiện secret được commit.
+- **Xử lý cục bộ:** không có backend, API upload, database, tài khoản hay cookie đăng nhập. Không có request tới bên thứ ba (test end-to-end kiểm tra điều này).
+- **Lưu nháp là tùy chọn và mặc định tắt;** khi bật, dữ liệu chỉ nằm trong IndexedDB của trình duyệt đó và bị xóa khi tắt.
+- **Không tin tên file:** nhận dạng bằng magic bytes; kích thước ảnh đọc từ header và ảnh quá lớn bị từ chối trước khi giải mã; tên file bị loại ký tự điều khiển/Bidi.
+- **Giới hạn tài nguyên:** 15 MB/ảnh, 24 MP/ảnh, 40 MB/PDF, 20 trang và 160 triệu pixel mỗi phiên (thấp hơn trên máy ít RAM); mọi bước đọc/render/OCR có deadline; hủy xuất dừng thật các worker.
+- **Đầu ra an toàn:** text được loại ký tự không hợp lệ trước khi tạo PDF/DOCX.
+- **CSP:** script chỉ từ cùng origin, script inline được ghim bằng hash lúc build (không còn `'unsafe-inline'` cho script); header đầy đủ (chống iframe, HSTS, nosniff…) cho Cloudflare Pages (`public/_headers`), Vercel (`vercel.json`) và Next.js server.
+- **Chuỗi cung ứng:** `npm audit` mức moderate = 0 lỗ hổng; mô hình OCR ghim checksum; worker/lõi OCR sinh từ lockfile lúc build; GitHub Actions ghim theo SHA; Dependabot hằng tuần.
 
-> AK Scan không tải nội dung tài liệu lên máy chủ. Trình duyệt, extension đã cài và thư mục Downloads vẫn thuộc phạm vi bảo mật của thiết bị người dùng.
-
-### GitHub Pages and security headers
-
-GitHub Pages only serves static files and cannot apply the response headers configured by `next.config.ts`. The exported HTML includes the same baseline CSP through a meta tag, which protects script, style, image, font, connection and worker sources. Browser-enforced framing protection (`frame-ancestors` / `X-Frame-Options`), HSTS, `nosniff`, Referrer Policy, Permissions Policy and COOP require a host that supports response headers such as Cloudflare Pages, Vercel, or a server under your control.
-
-### OWASP Top 10
-
-- **Broken Access Control, Authentication, CSRF, SSRF, SQL/command injection:** hiện không áp dụng vì AK Scan không có server, API, session, tài khoản hoặc database. Nếu kiến trúc này thay đổi, các kiểm soát trên phải được thiết kế và audit lại từ đầu.
-- **Injection/XSS:** React escape nội dung theo mặc định; source ứng dụng không dùng `dangerouslySetInnerHTML`, `innerHTML`, `eval` hoặc `new Function`. Text đưa vào tài liệu đầu ra được làm sạch riêng.
-- **Security Misconfiguration:** Next.js server đã khai báo CSP, `X-Frame-Options`, `nosniff`, Referrer Policy, Permissions Policy, COOP và HSTS. GitHub Pages không áp dụng custom response headers, nên clickjacking protection đầy đủ cần hosting hỗ trợ header như Cloudflare Pages, Vercel hoặc server riêng.
-- **Vulnerable and Outdated Components:** CI chạy `npm audit --audit-level=moderate`; Dependabot theo dõi npm và GitHub Actions hằng tuần.
-- **Software and Data Integrity:** dependency cài bằng `npm ci` từ lockfile, production bundle dùng SRI, workflow build chỉ có quyền đọc source và quyền deploy chỉ cấp cho job deploy.
-- **Resource Consumption:** quota, timeout và cleanup giảm nguy cơ treo tab; file được chế tạo đặc biệt vẫn có thể làm chậm thiết bị trong giới hạn local nhưng không tạo DoS lên máy chủ AK Scan.
-
-### Kiểm thử bảo mật tự động
-
-`npm test` bao gồm bộ regression bảo mật kiểm tra file giả mạo, header ảnh/PDF không hợp lệ, Unicode Bidi trong filename, text XML không an toàn, giới hạn độ dài và timeout. GitHub Actions chạy dependency audit, lint, typecheck, toàn bộ test và production build trước khi deploy.
-
-```bash
-npm run test:security
-npm run security:audit
-```
-
-Dependabot được cấu hình tại `.github/dependabot.yml`. Tài liệu chi tiết và các rủi ro còn lại nằm trong [06-SECURITY-PRIVACY.md](06-SECURITY-PRIVACY.md).
+Chi tiết: [06-SECURITY-PRIVACY.md](06-SECURITY-PRIVACY.md).
 
 ## Sử dụng
 
-1. Chọn ảnh, PDF hoặc mở camera.
-2. Kiểm tra vùng giấy và chỉnh bốn góc nếu cần.
-3. Chọn bộ lọc và tinh chỉnh ảnh.
-4. Chọn đầu ra PDF, PDF tìm kiếm hoặc Word chỉnh sửa.
-5. Kiểm tra kết quả với bản gốc trước khi sử dụng cho tài liệu quan trọng.
-
-Ảnh phẳng, đủ sáng, camera song song mặt giấy và bốn góc được căn chính xác sẽ cho OCR tốt hơn.
+1. Chọn/kéo ảnh, PDF hoặc mở camera.
+2. Kiểm tra vùng giấy (đã tự dò) và chỉnh bốn góc nếu cần.
+3. Chọn bộ lọc và tinh chỉnh.
+4. Chọn đầu ra: PDF, PDF tìm kiếm hoặc Word; với trang cần nhận diện chữ, kiểm tra từng dòng ở bước xem và sửa.
+5. Đối chiếu số liệu quan trọng với bản gốc.
 
 ## Chạy local
 
@@ -76,32 +50,32 @@ Yêu cầu Node.js 20+ và npm.
 git clone https://github.com/akkhanh05/ak-scan.git
 cd ak-scan
 npm ci
-npm run dev
+npm run dev        # tự sinh worker/lõi OCR/PDF worker vào public/
 ```
 
-Mở [http://localhost:3000](http://localhost:3000).
+Mở [http://localhost:3000](http://localhost:3000). Khi sửa `workflow/shared/core/scan.ts` hoặc render worker, chạy lại `node workflow/scripts/sync-runtime-assets.mjs` (hoặc khởi động lại `npm run dev`) để bundle lại worker.
 
 ## Kiểm tra chất lượng
 
 ```bash
 npm run lint
 npm run typecheck
-npm test
-npm run build
+npm test                                   # gồm OCR thật trên ảnh mẫu
+STATIC_EXPORT=true BASE_PATH=/ak-scan npm run build
+npm run test:e2e                           # Playwright, dùng Chrome cài trên máy
 ```
 
-GitHub Actions chạy dependency audit, lint, typecheck, toàn bộ test (bao gồm security regression) và build static site.
+Chi tiết: [08-TEST-PLAN.md](08-TEST-PLAN.md).
 
-## Deploy GitHub Pages
+## Triển khai
 
-Repository đã có workflow tại `.github/workflows/deploy-pages.yml`.
+| Host | Thiết lập |
+|---|---|
+| **Cloudflare Pages** (khuyên dùng) | Build command `npm run build`, biến môi trường `STATIC_EXPORT=true`, output `out`. Header bảo mật lấy từ `public/_headers`. |
+| **Vercel** | Framework Next.js; hoặc static export với `STATIC_EXPORT=true`. Header từ `vercel.json` (và `next.config.ts` khi chạy server). |
+| **GitHub Pages** | Workflow `.github/workflows/deploy-pages.yml` (Settings → Pages → GitHub Actions). Base path tự suy từ tên repo. Không hỗ trợ header tùy chỉnh. |
 
-1. Vào **Settings → Pages** và chọn **GitHub Actions**.
-2. Push lên nhánh `main` hoặc chạy workflow thủ công.
-3. Với repository này, URL dự kiến là:
-   `https://akkhanh05.github.io/ak-scan/`
-
-Nếu dùng tên miền riêng, cấu hình `NEXT_PUBLIC_SITE_URL` và thêm `public/CNAME` chứa tên miền chính thức.
+Dùng `BASE_PATH=/duong-dan` nếu site không nằm ở gốc tên miền; `NEXT_PUBLIC_SITE_URL` cho URL chính thức (Open Graph). Sau khi sửa `security-policy.ts`, chạy `npm run headers:sync`.
 
 ## Giới hạn hiện tại
 
@@ -111,25 +85,29 @@ Nếu dùng tên miền riêng, cấu hình `NEXT_PUBLIC_SITE_URL` và thêm `pu
 | Dung lượng mỗi ảnh | 15 MB |
 | Độ phân giải mỗi ảnh | 24 MP |
 | Dung lượng mỗi PDF | 40 MB |
-| Tổng pixel mỗi phiên | 160 triệu |
+| Tổng pixel mỗi phiên | 160 triệu (80/40 triệu trên máy ≤4/≤2 GB RAM) |
+
+Dựng bố cục Word là gần đúng: bảng có đường kẻ, ô gộp, màu nền, font được giữ; trang nhiều cột phức tạp, chữ xoay và hình vẽ vector không được tái tạo.
 
 ## Công nghệ
 
-- Next.js 16 và React 19
-- Canvas API và Offscreen-friendly rendering pipeline
-- PDF.js, pdf-lib, jsPDF
-- Tesseract.js với dữ liệu `eng` và `vie` nội bộ
-- `docx` cho Word chỉnh sửa
+- Next.js 16, React 19, TypeScript
+- Canvas/OffscreenCanvas trong Web Worker (bundle bằng esbuild)
+- PDF.js, pdf-lib, docx
+- Tesseract.js 7 với mô hình `Vietnamese` + `eng` (best_int) đóng gói sẵn
+- Playwright cho kiểm thử end-to-end
 
 ## Tài liệu kỹ thuật
 
 - [Kiến trúc hệ thống](02-ARCHITECTURE.md)
-- [Pipeline ảnh và OCR](05-IMAGE-OCR-PIPELINE.md)
+- [Pipeline ảnh, OCR và dựng lại tài liệu](05-IMAGE-OCR-PIPELINE.md)
 - [Bảo mật và quyền riêng tư](06-SECURITY-PRIVACY.md)
 - [Kế hoạch kiểm thử](08-TEST-PLAN.md)
 
 ## Tác giả và bản quyền
 
 Phát triển bởi **akkhanh — THE KODENAK**. Dự án được phát hành miễn phí trên GitHub; vui lòng giữ thông tin tác giả khi sử dụng, chỉnh sửa hoặc chia sẻ lại.
+
+Mô hình OCR trong `public/tessdata` thuộc dự án Tesseract OCR, giấy phép Apache-2.0 (nguồn và checksum trong `workflow/ocr-models.json`).
 
 © 2026 akkhanh — THE KODENAK.

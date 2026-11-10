@@ -1,0 +1,232 @@
+/* Review step, page range, drafts, loupe, sharing — new workflow features. */
+
+.button.small {
+  min-height: 34px;
+  padding: 0 0.8rem;
+  font-size: 0.82rem;
+  border-radius: 9px;
+}
+
+/* ── OCR review ─────────────────────────────────────────── */
+.review-dialog {
+  width: min(980px, calc(100% - 2rem));
+  max-width: 100vw;
+  display: none;
+  flex-direction: column;
+}
+.review-dialog[open] { display: flex; }
+.review-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 1.1rem;
+  border-bottom: 1px solid var(--color-rule);
+  background: var(--color-surface-subtle);
+}
+.review-filter {
+  display: inline-flex;
+  gap: 0.45rem;
+  align-items: center;
+  font-size: 0.85rem;
+  color: var(--color-ink-muted);
+}
+.review-body {
+  flex: 1;
+  overflow-x: hidden;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0.75rem 1.1rem 1rem;
+}
+.review-page h3 {
+  position: sticky;
+  top: -0.75rem;
+  z-index: 1;
+  margin: 0 0 0.4rem;
+  padding: 0.45rem 0;
+  font-size: 0.82rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-ink-muted);
+  background: var(--color-surface);
+}
+.review-page ol {
+  margin: 0 0 1rem;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.45rem;
+}
+.review-page li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  gap: 0.25rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 10px;
+  border: 1px solid transparent;
+}
+.review-page li.uncertain {
+  background: var(--color-warning-soft);
+  border-color: color-mix(in srgb, var(--color-warning) 45%, transparent);
+}
+.review-crop {
+  max-width: 100%;
+  border-radius: 6px;
+  border: 1px solid var(--color-rule);
+  background-color: #ffffff;
+  background-repeat: no-repeat;
+}
+.review-line {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 0.45rem;
+  align-items: center;
+  color: var(--color-success);
+}
+.review-page li.uncertain .review-line { color: var(--color-warning); }
+.review-line input {
+  width: 100%;
+  min-height: 36px;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--color-rule);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.92rem;
+  color: var(--color-ink);
+  background: var(--color-surface);
+}
+.review-line input:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 1px;
+}
+.review-empty {
+  color: var(--color-ink-muted);
+  font-size: 0.88rem;
+}
+
+/* ── Page range ─────────────────────────────────────────── */
+.range-dialog { width: min(520px, calc(100% - 2rem)); }
+.range-body {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.8rem;
+}
+.range-field {
+  display: grid;
+  gap: 0.35rem;
+  font-weight: var(--weight-medium);
+  font-size: 0.9rem;
+}
+.range-field input {
+  width: 8rem;
+  min-height: 40px;
+  padding: 0 0.6rem;
+  border: 1px solid var(--color-rule);
+  border-radius: 8px;
+  font: inherit;
+  color: var(--color-ink);
+  background: var(--color-surface);
+}
+.range-summary {
+  margin: 0;
+  color: var(--color-ink-muted);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+/* ── Drafts ─────────────────────────────────────────────── */
+.draft-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--color-rule);
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: var(--weight-medium);
+  color: var(--color-ink-muted);
+  cursor: pointer;
+  background: var(--color-surface);
+}
+.draft-toggle input { accent-color: var(--color-accent); margin: 0; }
+.draft-banner {
+  width: min(1100px, calc(100% - 2rem));
+  margin: 1rem auto 0;
+  padding: 0.7rem 0.9rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+  border: 1px solid var(--color-accent-border);
+  border-radius: 12px;
+  background: var(--color-accent-soft);
+  color: var(--color-ink);
+  font-size: 0.9rem;
+}
+.draft-banner span { flex: 1 1 260px; }
+
+/* ── Workspace additions ───────────────────────────────── */
+.page-kind-note {
+  display: flex;
+  gap: 0.4rem;
+  align-items: flex-start;
+  margin: 0 0 0.5rem;
+  padding: 0.4rem 0.55rem;
+  border-radius: 9px;
+  font-size: 0.74rem;
+  line-height: 1.35;
+  color: var(--color-ink);
+  background: var(--color-accent-soft);
+  border: 1px solid var(--color-accent-border);
+}
+.page-kind-note svg { flex: none; margin-top: 0.15rem; color: var(--color-accent); }
+.share-export {
+  width: 100%;
+  min-height: 36px;
+  margin-top: 0.4rem;
+  justify-content: center;
+  font-size: 0.85rem;
+}
+.corner-loupe {
+  position: absolute;
+  z-index: 40;
+  width: 132px;
+  height: 132px;
+  border-radius: 50%;
+  border: 3px solid var(--color-surface);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.35), 0 0 0 1px var(--color-accent);
+  pointer-events: none;
+  background: #ffffff;
+}
+
+@media (max-width: 760px) {
+  .review-dialog { width: 100%; max-height: 100dvh; border-radius: 0; }
+  .draft-toggle span { display: none; }
+}
+
+/* ── Layout fixes ───────────────────────────────────────── */
+/* One page must not stretch to the full height of the list. */
+.page-list { align-content: start; }
+/* Space for the hover actions only while they are visible. */
+.page-select { padding-right: 0.5rem; }
+.page-row:hover .page-select, .page-row:focus-within .page-select { padding-right: 76px; }
+
+/* The toolbar must never widen the preview column (labels collapse to icons). */
+.canvas-panel { container-type: inline-size; grid-template-columns: minmax(0, 1fr); }
+.canvas-toolbar button { white-space: nowrap; }
+@media (min-width: 601px) {
+  .canvas-toolbar { min-width: 0; overflow-x: auto; scrollbar-width: thin; gap: 0.25rem; }
+  @container (max-width: 640px) {
+    .canvas-toolbar .toolbar-label { display: none; }
+  }
+  @container (max-width: 420px) {
+    .canvas-toolbar .crop-toggle .toolbar-label-main { display: none; }
+  }
+}
+@media (max-width: 600px) {
+  .canvas-toolbar { grid-template-columns: repeat(auto-fit, minmax(44px, 1fr)) !important; }
+  .canvas-toolbar button { white-space: normal; }
+}

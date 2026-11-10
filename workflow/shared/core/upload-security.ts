@@ -26,6 +26,55 @@ export async function detectUploadKind(file: File): Promise<SupportedUploadKind 
   return null;
 }
 
+/**
+ * Reads the pixel size from the image header without decoding the image, so an
+ * oversized picture is rejected before the browser allocates its bitmap.
+ * JPEG: first SOFn segment; PNG: IHDR; WebP: VP8/VP8L/VP8X.
+ */
+export function imageDimensionsFromHeader(bytes: Uint8Array, kind: SupportedUploadKind): { width: number; height: number } | null {
+  const u16be = (offset: number) => (bytes[offset] << 8) | bytes[offset + 1];
+  const u24le = (offset: number) => bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16);
+  if (kind === "png" && bytes.length >= 24) {
+    const width = ((bytes[16] << 24) >>> 0) + (bytes[17] << 16) + (bytes[18] << 8) + bytes[19];
+    const height = ((bytes[20] << 24) >>> 0) + (bytes[21] << 16) + (bytes[22] << 8) + bytes[23];
+    return width && height ? { width, height } : null;
+  }
+  if (kind === "webp" && bytes.length >= 30) {
+    const chunk = String.fromCharCode(bytes[12], bytes[13], bytes[14], bytes[15]);
+    if (chunk === "VP8 ") return { width: ((bytes[27] << 8) | bytes[26]) & 0x3fff, height: ((bytes[29] << 8) | bytes[28]) & 0x3fff };
+    if (chunk === "VP8L") {
+      const b0 = bytes[21], b1 = bytes[22], b2 = bytes[23], b3 = bytes[24];
+      return { width: 1 + (((b1 & 0x3f) << 8) | b0), height: 1 + (((b3 & 0x0f) << 10) | (b2 << 2) | ((b1 & 0xc0) >> 6)) };
+    }
+    if (chunk === "VP8X") return { width: 1 + u24le(24), height: 1 + u24le(27) };
+    return null;
+  }
+  if (kind === "jpeg") {
+    let offset = 2;
+    while (offset + 9 < bytes.length) {
+      if (bytes[offset] !== 0xff) { offset++; continue; }
+      const marker = bytes[offset + 1];
+      if (marker === 0xff) { offset++; continue; }
+      if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { offset += 2; continue; }
+      const length = u16be(offset + 2);
+      const isFrame = marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
+      if (isFrame) {
+        const height = u16be(offset + 5), width = u16be(offset + 7);
+        return width && height ? { width, height } : null;
+      }
+      if (marker === 0xda || length < 2) return null;
+      offset += 2 + length;
+    }
+  }
+  return null;
+}
+
+/** Reads enough of the file to parse the header (JPEG EXIF can precede SOF). */
+export async function readImageDimensions(file: Blob, kind: SupportedUploadKind) {
+  const bytes = new Uint8Array(await file.slice(0, Math.min(file.size, 2 * 1024 * 1024)).arrayBuffer());
+  return imageDimensionsFromHeader(bytes, kind);
+}
+
 export function safeDisplayName(name: string) {
   const cleaned = name.normalize("NFC").replace(CONTROL_CHARACTERS, "").replace(FILENAME_FORMATTING_CHARACTERS, "").trim();
   return (cleaned || "Tài liệu không tên").slice(0, 160);

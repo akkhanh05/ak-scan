@@ -8,7 +8,7 @@
 /* Topbar Header */
 .topbar {
   height: 72px;
-  background: #ffffff;
+  background: var(--color-surface);
   border-bottom: 1px solid var(--color-rule);
   position: sticky;
   top: 0;
@@ -32,7 +32,7 @@
   align-items: center;
   justify-content: center;
   gap: 0.65rem;
-  color: #64748b;
+  color: var(--color-ink-muted);
   font-size: 0.78rem;
   font-weight: 650;
   white-space: nowrap;
@@ -41,7 +41,7 @@
 .topbar-capabilities i {
   width: 4px;
   height: 4px;
-  background: #93c5fd;
+  background: var(--color-accent-border);
   border-radius: 999px;
 }
 
@@ -62,8 +62,8 @@
   height: 36px;
   display: grid;
   place-items: center;
-  color: #ffffff;
-  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+  color: var(--color-accent-ink);
+  background: linear-gradient(135deg, var(--color-accent-fill) 0%, var(--color-accent-fill-hover) 100%);
   border-radius: var(--radius-md);
   box-shadow: 0 3px 10px rgba(37, 99, 235, 0.3);
 }
@@ -93,7 +93,7 @@
 }
 
 .clear-session-btn:hover:not(:disabled) {
-  background: #fee2e2;
+  background: var(--color-danger-soft);
 }
 
 .privacy-pill {
@@ -122,9 +122,9 @@
   align-items: center;
   gap: 0.5rem;
   padding: 0.4rem 1rem;
-  background: #eff6ff;
-  border: 1px solid #dbeafe;
-  color: #1d4ed8;
+  background: var(--color-accent-soft);
+  border: 1px solid var(--color-accent-border);
+  color: var(--color-accent-hover);
   border-radius: 999px;
   font-family: var(--font-mono);
   font-size: 0.72rem;
@@ -144,8 +144,8 @@
 }
 
 .hero-title .highlight {
-  color: #1d4ed8;
-  background: linear-gradient(180deg, transparent 65%, #dbeafe 65%);
+  color: var(--color-accent-hover);
+  background: linear-gradient(180deg, transparent 65%, var(--color-accent-soft-strong) 65%);
   padding: 0 0.2rem;
 }
 
@@ -167,7 +167,7 @@
 
 .upload-zone-card {
   position: relative;
-  background: #ffffff;
+  background: var(--color-surface);
   border: 1px solid var(--color-rule);
   border-radius: var(--radius-2xl);
   box-shadow: 0 20px 50px -12px rgba(15, 23, 42, 0.07), 0 2px 6px rgba(15, 23, 42, 0.02);
@@ -189,13 +189,13 @@
   position: absolute;
   top: 1.25rem;
   padding: 0.3rem 0.7rem;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: var(--color-paper);
+  border: 1px solid var(--color-rule);
   border-radius: 8px;
   font-family: var(--font-mono);
   font-size: 0.7rem;
   font-weight: 700;
-  color: #94a3b8;
+  color: var(--color-ink-subtle);
 }
 
 .format-floating-tag.top-left {
@@ -211,8 +211,8 @@
   height: 68px;
   display: grid;
   place-items: center;
-  background: #eff6ff;
-  color: #2563eb;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
   border-radius: 20px;
   margin-bottom: 1.25rem;
   box-shadow: 0 4px 12px rgba(37, 99, 235, 0.12);
@@ -268,26 +268,26 @@
 }
 
 .button.primary {
-  background: #1d4ed8;
-  color: #ffffff;
+  background: var(--color-accent-fill);
+  color: var(--color-accent-ink);
   box-shadow: 0 6px 20px -2px rgba(29, 78, 216, 0.35);
 }
 
 .button.primary:hover:not(:disabled) {
-  background: #1e40af;
+  background: var(--color-accent-fill-hover);
   box-shadow: 0 8px 24px -2px rgba(29, 78, 216, 0.45);
 }
 
 .button.secondary {
-  background: #ffffff;
-  border-color: #cbd5e1;
-  color: #1e293b;
+  background: var(--color-surface);
+  border-color: var(--color-rule-dashed);
+  color: var(--color-ink-strong);
   box-shadow: 0 2px 6px rgba(15, 23, 42, 0.04);
 }
 
 .button.secondary:hover:not(:disabled) {
-  background: #f8fafc;
-  border-color: #94a3b8;
+  background: var(--color-paper);
+  border-color: var(--color-ink-subtle);
 }
 
 /* Trust Stats Bar */
@@ -299,8 +299,8 @@
 }
 
 .stat-card {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--color-surface);
+  border: 1px solid var(--color-rule);
   border-radius: 16px;
   padding: 1.1rem 1rem;
   text-align: center;
@@ -315,12 +315,12 @@
   font-family: var(--font-display);
   font-size: 1.4rem;
   font-weight: var(--weight-bold);
-  color: #1d4ed8;
+  color: var(--color-accent-hover);
 }
 
 .stat-card span {
   font-size: 0.82rem;
-  color: #64748b;
+  color: var(--color-ink-muted);
   font-weight: 600;
   margin-top: 0.2rem;
 }
@@ -332,15 +332,15 @@
   gap: 0.55rem;
   margin: 0.9rem auto 0;
   padding: 0.72rem 1rem;
-  color: #1e3a8a;
-  background: #eff6ff;
-  border: 1px solid #bfdbfe;
+  color: var(--color-accent-strong);
+  background: var(--color-accent-soft);
+  border: 1px solid var(--color-accent-border);
   border-radius: 12px;
   font-size: 0.82rem;
   line-height: 1.45;
 }
 
-.upload-privacy-note svg { flex: 0 0 auto; color: #2563eb; }
+.upload-privacy-note svg { flex: 0 0 auto; color: var(--color-accent); }
 
 /* Persistent page navigation: visible while both workspace and guide scroll. */
 .page-toc {
@@ -351,8 +351,8 @@
   width: 182px;
   padding: 1rem;
   transform: translateY(-45%);
-  background: rgba(255, 255, 255, 0.96);
-  border: 1px solid #dbe3ee;
+  background: color-mix(in srgb, var(--color-surface) 96%, transparent);
+  border: 1px solid var(--color-rule);
   border-radius: 18px;
   box-shadow: 0 14px 38px rgba(15, 23, 42, 0.12);
   backdrop-filter: blur(12px);
@@ -360,7 +360,7 @@
 
 .page-toc > p {
   margin: 0 0 0.65rem 0.55rem;
-  color: #94a3b8;
+  color: var(--color-ink-subtle);
   font-family: var(--font-mono);
   font-size: 0.68rem;
   font-weight: 800;
@@ -374,7 +374,7 @@
   align-items: center;
   gap: 0.6rem;
   padding: 0.62rem 0.7rem;
-  color: #475569;
+  color: var(--color-ink-soft);
   border-radius: 10px;
   text-decoration: none;
   font-size: 0.8rem;
@@ -383,9 +383,9 @@
 }
 
 .page-toc a:hover,
-.page-toc a:focus-visible { color: #1d4ed8; background: #eff6ff; }
-.page-toc a:first-child { color: #1d4ed8; background: #eff6ff; border: 1px solid #bfdbfe; }
-.page-toc svg { flex: 0 0 auto; color: #2563eb; }
+.page-toc a:focus-visible { color: var(--color-accent-hover); background: var(--color-accent-soft); }
+.page-toc a:first-child { color: var(--color-accent-hover); background: var(--color-accent-soft); border: 1px solid var(--color-accent-border); }
+.page-toc svg { flex: 0 0 auto; color: var(--color-accent); }
 
 @media (min-width: 1100px) {
   .hero-section {

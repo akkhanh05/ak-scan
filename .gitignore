@@ -38,3 +38,13 @@ CLAUDE.md
 # OCR models currently unused at repository root
 eng.traineddata
 vie.traineddata
+
+# Generated from node_modules by workflow/scripts/sync-runtime-assets.mjs
+public/tesseract-core/
+public/tesseract-worker.min.js
+public/pdf.worker.min.mjs
+public/render-worker.js
+
+# Playwright
+test-results/
+playwright-report/

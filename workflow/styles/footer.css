@@ -1,7 +1,7 @@
 /* Mini Footer */
 .mini-footer {
   margin-top: auto;
-  background: #ffffff;
+  background: var(--color-surface);
   border-top: 1px solid var(--color-rule);
   padding: 1.25rem var(--space-lg);
   text-align: center;
@@ -19,7 +19,7 @@
 }
 
 .mini-footer span {
-  color: #94a3b8;
+  color: var(--color-ink-subtle);
   font-size: 0.8rem;
 }
 

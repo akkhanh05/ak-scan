@@ -1,12 +1,19 @@
 {
-  "name": "AK Scan",
+  "name": "AK Scan – Quét tài liệu và chuyển PDF sang Word",
   "short_name": "AK Scan",
-  "description": "Quét tài liệu, tạo PDF và chuyển PDF sang Word ngay trên thiết bị.",
+  "description": "Quét tài liệu, tạo PDF và chuyển PDF sang Word ngay trên thiết bị. Không tải tài liệu lên máy chủ.",
+  "lang": "vi",
+  "id": "./",
   "start_url": "./",
+  "scope": "./",
   "display": "standalone",
   "background_color": "#f8fafc",
   "theme_color": "#2563eb",
+  "categories": ["productivity", "utilities"],
   "icons": [
-    { "src": "apple-touch-icon.png", "sizes": "180x180", "type": "image/png" }
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
   ]
 }

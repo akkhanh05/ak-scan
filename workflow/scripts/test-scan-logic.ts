@@ -7,7 +7,7 @@
 import {
   defaultCorners,
   defaultSettings,
-  canvasFilter,
+  blurRgba,
   percentile,
   intersectLines,
   distance,
@@ -26,6 +26,7 @@ import {
   Corners,
   DetectedLine,
 } from "../shared/core/scan";
+import { mapSourceToRendered, unprojectQuadToUnit } from "../shared/core/page-geometry";
 
 // Mock Canvas & DOM Environment for Node environment if needed
 class MockCanvasRenderingContext2D {
@@ -172,41 +173,39 @@ runTest("defaultSettings has correct initial defaults", () => {
 });
 
 // ----------------------------------------------------
-// 2. CSS Canvas Filter Generator Test Suite
+// 2. Worker-safe blur and page geometry
 // ----------------------------------------------------
-console.log("\nSuite 2: CSS Canvas Filter Generator (canvasFilter)");
+console.log("\nSuite 2: Worker-safe blur (replaces ctx.filter) and page geometry");
 
-runTest("canvasFilter returns 'none' for enhanced, grayscale, and bw filters", () => {
-  const enhancedSettings: ScanSettings = { ...defaultSettings, filter: "enhanced" };
-  const grayscaleSettings: ScanSettings = { ...defaultSettings, filter: "grayscale" };
-  const bwSettings: ScanSettings = { ...defaultSettings, filter: "bw" };
-
-  assertEquals(canvasFilter(enhancedSettings), "none", "Filter 'enhanced' should yield CSS 'none'");
-  assertEquals(canvasFilter(grayscaleSettings), "none", "Filter 'grayscale' should yield CSS 'none'");
-  assertEquals(canvasFilter(bwSettings), "none", "Filter 'bw' should yield CSS 'none'");
+runTest("blurRgba keeps a uniform paper colour unchanged", () => {
+  const pixels = new Uint8ClampedArray(12 * 8 * 4).fill(200);
+  blurRgba(pixels, 12, 8, 4);
+  assert(pixels.every((value, index) => index % 4 === 3 || value === 200), "uniform image must stay uniform");
 });
 
-runTest("canvasFilter returns correct filter string for 'original' default settings", () => {
-  const css = canvasFilter(defaultSettings);
-  // filter === "original" -> saturation = 1, contrast = 100, brightness = 100
-  assertEquals(css, "grayscale(0) contrast(100%) brightness(100%)", "Default original CSS filter mismatch");
+runTest("blurRgba spreads a dark glyph so the background map no longer contains it", () => {
+  const width = 21, height = 21;
+  const pixels = new Uint8ClampedArray(width * height * 4).fill(255);
+  const center = (10 * width + 10) * 4;
+  pixels[center] = pixels[center + 1] = pixels[center + 2] = 0;
+  blurRgba(pixels, width, height, 4);
+  assert(pixels[center] > 200, `isolated ink must be mostly removed, got ${pixels[center]}`);
 });
 
-runTest("canvasFilter correctly handles custom brightness, contrast, and whiten settings", () => {
-  const customSettings: ScanSettings = {
-    filter: "original",
-    brightness: 15,
-    contrast: 25,
-    whiten: 50,
-    sharpen: 10,
-    removeShadow: 20,
-  };
+runTest("unprojectQuadToUnit inverts projectUnitToQuad for a perspective crop", () => {
+  const corners: Corners = [{ x: .1, y: .05 }, { x: .92, y: .12 }, { x: .85, y: .95 }, { x: .05, y: .88 }];
+  for (const [u, v] of [[0, 0], [1, 0], [.3, .7], [.5, .5], [1, 1]]) {
+    const point = projectUnitToQuad(corners, u, v);
+    const back = unprojectQuadToUnit(corners, point);
+    assert(Math.abs(back.x - u) < 1e-9 && Math.abs(back.y - v) < 1e-9, `round trip failed for ${u},${v}`);
+  }
+});
 
-  // saturation = 1 -> grayscale(0)
-  // contrast = 100 + 25 = 125%
-  // brightness = 100 + 15 + 50 * 0.18 = 124%
-  const css = canvasFilter(customSettings);
-  assertEquals(css, "grayscale(0) contrast(125%) brightness(124%)", "Custom original CSS filter calculation");
+runTest("mapSourceToRendered follows a quarter turn exactly like renderPage", () => {
+  const corners: Corners = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
+  // Source 200x100 rotated 90° clockwise renders as 100x200: top-left goes to top-right.
+  const mapped = mapSourceToRendered({ x: 0, y: 0 }, { corners, rotation: 90, fineRotation: 0 }, { width: 100, height: 200 });
+  assert(Math.abs(mapped.x - 100) < 1e-9 && Math.abs(mapped.y - 0) < 1e-9, `got ${mapped.x},${mapped.y}`);
 });
 
 // ----------------------------------------------------

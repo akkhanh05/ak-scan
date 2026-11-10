@@ -45,7 +45,7 @@ export function DonateWidget({ inWorkbench = false }: { inWorkbench?: boolean })
   }
 
   return (
-    <aside className="donate-floating-widget" aria-label="Ủng hộ tác giả">
+    <aside className={`donate-floating-widget ${inWorkbench ? "in-workbench" : ""}`} aria-label="Ủng hộ tác giả">
       {compact ? (
         <button className="donate-compact-indicator" title="Mở mục ủng hộ tác giả" aria-label="Mở mục ủng hộ tác giả" onClick={() => setOpen(true)}>
           <Heart size={18} aria-hidden="true" />
