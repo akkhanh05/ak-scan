@@ -1,4 +1,5 @@
-import { HardDriveDownload, LockKeyhole, ScanLine, Trash2 } from "lucide-react";
+import { HardDriveDownload, LockKeyhole, Trash2 } from "lucide-react";
+import { AkLogo } from "./ak-logo";
 
 type AppHeaderProps = {
   hasPages: boolean;
@@ -13,7 +14,7 @@ export function AppHeader({ hasPages, exporting, onClearSession, draftEnabled, o
     <header className="topbar">
       <div className="topbar-inner">
         <a className="brand" href="#top" aria-label="AK Scan, về đầu trang">
-          <span className="brand-logo-box"><ScanLine size={18} /></span>
+          <span className="brand-logo-box"><AkLogo size={36} /></span>
           <span className="brand-title">AK Scan</span>
         </a>
 
