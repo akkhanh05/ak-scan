@@ -48,3 +48,9 @@ public/render-worker.js
 # Playwright
 test-results/
 playwright-report/
+
+# Local technical notes
+02-ARCHITECTURE.md
+05-IMAGE-OCR-PIPELINE.md
+06-SECURITY-PRIVACY.md
+08-TEST-PLAN.md
